@@ -1,0 +1,4 @@
+../Core/Src/app/cli_app.c:7:13:trim_inplace	5
+../Core/Src/app/cli_app.c:18:13:to_upper_inplace	3
+../Core/Src/app/cli_app.c:22:6:app_cli_print_banner	1
+../Core/Src/app/cli_app.c:30:6:app_cli_handle_line	5

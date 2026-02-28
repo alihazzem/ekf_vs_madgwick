@@ -6,14 +6,17 @@
 # Add inputs and outputs from these tool invocations to the build variables 
 C_SRCS += \
 ../Core/Src/utils/math3d.c \
+../Core/Src/utils/ringbuf.c \
 ../Core/Src/utils/timebase.c 
 
 OBJS += \
 ./Core/Src/utils/math3d.o \
+./Core/Src/utils/ringbuf.o \
 ./Core/Src/utils/timebase.o 
 
 C_DEPS += \
 ./Core/Src/utils/math3d.d \
+./Core/Src/utils/ringbuf.d \
 ./Core/Src/utils/timebase.d 
 
 
@@ -24,7 +27,7 @@ Core/Src/utils/%.o Core/Src/utils/%.su Core/Src/utils/%.cyclo: ../Core/Src/utils
 clean: clean-Core-2f-Src-2f-utils
 
 clean-Core-2f-Src-2f-utils:
-	-$(RM) ./Core/Src/utils/math3d.cyclo ./Core/Src/utils/math3d.d ./Core/Src/utils/math3d.o ./Core/Src/utils/math3d.su ./Core/Src/utils/timebase.cyclo ./Core/Src/utils/timebase.d ./Core/Src/utils/timebase.o ./Core/Src/utils/timebase.su
+	-$(RM) ./Core/Src/utils/math3d.cyclo ./Core/Src/utils/math3d.d ./Core/Src/utils/math3d.o ./Core/Src/utils/math3d.su ./Core/Src/utils/ringbuf.cyclo ./Core/Src/utils/ringbuf.d ./Core/Src/utils/ringbuf.o ./Core/Src/utils/ringbuf.su ./Core/Src/utils/timebase.cyclo ./Core/Src/utils/timebase.d ./Core/Src/utils/timebase.o ./Core/Src/utils/timebase.su
 
 .PHONY: clean-Core-2f-Src-2f-utils
 

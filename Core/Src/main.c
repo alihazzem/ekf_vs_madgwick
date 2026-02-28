@@ -22,6 +22,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <string.h>
+#include "drivers/uart_cli.h"
+#include "app/cli_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -99,18 +101,15 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start_IT(&htim2);
-
-  const char *boot = "Boot OK\r\n";
-  HAL_UART_Transmit(&huart2, (uint8_t*)boot, strlen(boot), 100);
+  app_cli_print_banner();
+  uart_cli_init(&huart2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  const char *msg = "HELLO\r\n";
-	  HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 100);
-	  HAL_Delay(1000);
+	  uart_cli_poll();
 
     /* USER CODE END WHILE */
 
@@ -302,6 +301,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   {
     imu_tick = 1;   // 100 Hz tick
   }
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  uart_cli_on_rx_byte(huart);
 }
 
 /* USER CODE END 4 */

@@ -6,14 +6,17 @@
 # Add inputs and outputs from these tool invocations to the build variables 
 C_SRCS += \
 ../Core/Src/drivers/mpu6050.c \
+../Core/Src/drivers/uart_cli.c \
 ../Core/Src/drivers/uart_logger.c 
 
 OBJS += \
 ./Core/Src/drivers/mpu6050.o \
+./Core/Src/drivers/uart_cli.o \
 ./Core/Src/drivers/uart_logger.o 
 
 C_DEPS += \
 ./Core/Src/drivers/mpu6050.d \
+./Core/Src/drivers/uart_cli.d \
 ./Core/Src/drivers/uart_logger.d 
 
 
@@ -24,7 +27,7 @@ Core/Src/drivers/%.o Core/Src/drivers/%.su Core/Src/drivers/%.cyclo: ../Core/Src
 clean: clean-Core-2f-Src-2f-drivers
 
 clean-Core-2f-Src-2f-drivers:
-	-$(RM) ./Core/Src/drivers/mpu6050.cyclo ./Core/Src/drivers/mpu6050.d ./Core/Src/drivers/mpu6050.o ./Core/Src/drivers/mpu6050.su ./Core/Src/drivers/uart_logger.cyclo ./Core/Src/drivers/uart_logger.d ./Core/Src/drivers/uart_logger.o ./Core/Src/drivers/uart_logger.su
+	-$(RM) ./Core/Src/drivers/mpu6050.cyclo ./Core/Src/drivers/mpu6050.d ./Core/Src/drivers/mpu6050.o ./Core/Src/drivers/mpu6050.su ./Core/Src/drivers/uart_cli.cyclo ./Core/Src/drivers/uart_cli.d ./Core/Src/drivers/uart_cli.o ./Core/Src/drivers/uart_cli.su ./Core/Src/drivers/uart_logger.cyclo ./Core/Src/drivers/uart_logger.d ./Core/Src/drivers/uart_logger.o ./Core/Src/drivers/uart_logger.su
 
 .PHONY: clean-Core-2f-Src-2f-drivers
 

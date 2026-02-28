@@ -16,6 +16,7 @@ RM := rm -rf
 -include Core/Src/drivers/subdir.mk
 -include Core/Src/app/subdir.mk
 -include Core/Src/subdir.mk
+-include Core/Inc/app/subdir.mk
 -include objects.mk
 
 ifneq ($(MAKECMDGOALS),clean)
