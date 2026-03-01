@@ -1,0 +1,4 @@
+../Core/Src/drivers/i2c_reg.c:3:25:map_status	16	static
+../Core/Src/drivers/i2c_reg.c:9:18:i2c_scan	32	static
+../Core/Src/drivers/i2c_reg.c:24:18:i2c_read_reg	48	static
+../Core/Src/drivers/i2c_reg.c:43:18:i2c_write_reg	40	static

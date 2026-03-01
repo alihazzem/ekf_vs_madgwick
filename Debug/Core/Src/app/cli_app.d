@@ -29,7 +29,9 @@ Core/Src/app/cli_app.o: ../Core/Src/app/cli_app.c \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pwr_ex.h \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim.h \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h \
- ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h
+ ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h \
+ ../Core/Inc/drivers/i2c_reg.h ../Core/Inc/drivers/mpu6050.h \
+ ../Core/Inc/app/imu_app.h
 ../Core/Inc/app/cli_app.h:
 ../Core/Inc/drivers/uart_cli.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal.h:
@@ -62,3 +64,6 @@ Core/Src/app/cli_app.o: ../Core/Src/app/cli_app.c \
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h:
+../Core/Inc/drivers/i2c_reg.h:
+../Core/Inc/drivers/mpu6050.h:
+../Core/Inc/app/imu_app.h:

@@ -1,4 +1,6 @@
-../Core/Src/app/cli_app.c:7:13:trim_inplace	32	static
-../Core/Src/app/cli_app.c:18:13:to_upper_inplace	24	static
-../Core/Src/app/cli_app.c:22:6:app_cli_print_banner	8	static
-../Core/Src/app/cli_app.c:30:6:app_cli_handle_line	272	static
+../Core/Src/app/cli_app.c:18:13:trim_inplace	32	static
+../Core/Src/app/cli_app.c:33:13:to_upper_inplace	24	static
+../Core/Src/app/cli_app.c:46:12:tokenize	32	static
+../Core/Src/app/cli_app.c:67:17:parse_u32_auto	24	static
+../Core/Src/app/cli_app.c:89:6:app_cli_print_banner	8	static
+../Core/Src/app/cli_app.c:102:6:app_cli_handle_line	568	static

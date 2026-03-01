@@ -1,5 +1,7 @@
 "./Core/Src/app/app_imu_task.o"
 "./Core/Src/app/cli_app.o"
+"./Core/Src/app/imu_app.o"
+"./Core/Src/drivers/i2c_reg.o"
 "./Core/Src/drivers/mpu6050.o"
 "./Core/Src/drivers/uart_cli.o"
 "./Core/Src/drivers/uart_logger.o"

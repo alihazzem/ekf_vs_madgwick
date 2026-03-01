@@ -24,6 +24,7 @@
 #include <string.h>
 #include "drivers/uart_cli.h"
 #include "app/cli_app.h"
+#include "app/imu_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -103,6 +104,7 @@ int main(void)
   HAL_TIM_Base_Start_IT(&htim2);
   app_cli_print_banner();
   uart_cli_init(&huart2);
+  imu_app_init(&hi2c1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -110,6 +112,7 @@ int main(void)
   while (1)
   {
 	  uart_cli_poll();
+	  imu_app_poll();
 
     /* USER CODE END WHILE */
 
@@ -297,10 +300,9 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-  if (htim->Instance == TIM2)
-  {
-    imu_tick = 1;   // 100 Hz tick
-  }
+	if (htim->Instance == TIM2) {
+	  imu_app_on_100hz_tick();
+	}
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)

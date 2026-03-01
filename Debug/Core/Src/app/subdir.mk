@@ -6,15 +6,18 @@
 # Add inputs and outputs from these tool invocations to the build variables 
 C_SRCS += \
 ../Core/Src/app/app_imu_task.c \
-../Core/Src/app/cli_app.c 
+../Core/Src/app/cli_app.c \
+../Core/Src/app/imu_app.c 
 
 OBJS += \
 ./Core/Src/app/app_imu_task.o \
-./Core/Src/app/cli_app.o 
+./Core/Src/app/cli_app.o \
+./Core/Src/app/imu_app.o 
 
 C_DEPS += \
 ./Core/Src/app/app_imu_task.d \
-./Core/Src/app/cli_app.d 
+./Core/Src/app/cli_app.d \
+./Core/Src/app/imu_app.d 
 
 
 # Each subdirectory must supply rules for building sources it contributes
@@ -24,7 +27,7 @@ Core/Src/app/%.o Core/Src/app/%.su Core/Src/app/%.cyclo: ../Core/Src/app/%.c Cor
 clean: clean-Core-2f-Src-2f-app
 
 clean-Core-2f-Src-2f-app:
-	-$(RM) ./Core/Src/app/app_imu_task.cyclo ./Core/Src/app/app_imu_task.d ./Core/Src/app/app_imu_task.o ./Core/Src/app/app_imu_task.su ./Core/Src/app/cli_app.cyclo ./Core/Src/app/cli_app.d ./Core/Src/app/cli_app.o ./Core/Src/app/cli_app.su
+	-$(RM) ./Core/Src/app/app_imu_task.cyclo ./Core/Src/app/app_imu_task.d ./Core/Src/app/app_imu_task.o ./Core/Src/app/app_imu_task.su ./Core/Src/app/cli_app.cyclo ./Core/Src/app/cli_app.d ./Core/Src/app/cli_app.o ./Core/Src/app/cli_app.su ./Core/Src/app/imu_app.cyclo ./Core/Src/app/imu_app.d ./Core/Src/app/imu_app.o ./Core/Src/app/imu_app.su
 
 .PHONY: clean-Core-2f-Src-2f-app
 

@@ -1,5 +1,6 @@
 #include "drivers/uart_cli.h"
 #include "utils/ringbuf.h"
+#include "app/imu_app.h"
 #include <string.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -61,6 +62,15 @@ void uart_cli_on_rx_byte(UART_HandleTypeDef *huart) {
 // ───────────── line parser ─────────────
 static void handle_char(uint8_t c) {
   if (c == '\r') return;
+
+  // single-key emergency stop (works even while streaming floods the terminal)
+  if (c == '!') {
+    imu_app_stream_set(false);
+    imu_app_set_print_div(0);
+    uart_cli_send("\r\n[IMU] stream stopped\r\n> ");
+    s_line_len = 0; // drop any partially typed command
+    return;
+  }
 
   if (c == '\n') {
     s_line[s_line_len] = '\0';
