@@ -142,6 +142,7 @@ void app_cli_handle_line(const char *line)
     uart_cli_send("  MPU STREAM ON|OFF\r\n");
     uart_cli_send("  MPU PRINT <N>\r\n");
     uart_cli_send("  MPU RATE\r\n");
+    uart_cli_send("  MPU STATS [RESET]\r\n");
     return;
   }
 
@@ -292,21 +293,54 @@ void app_cli_handle_line(const char *line)
     }
 
     if (argc >= 2 && strcmp(argv[1], "RATE") == 0) {
-      /* Simple rate measurement:
-         - turn stream ON
-         - print_div=0
-         - user waits ~1 second
-         - call MPU RATE again => it prints rate based on ticks & samples since last call
-         This requires imu_app to expose counters. If you don't have that yet,
-         we do a minimal rate measurement here using HAL_GetTick() and sample counts
-         by asking imu_app for sample count.
-      */
-      /* If your imu_app does not yet expose sample counters, keep this as a placeholder. */
-      uart_cli_send("RATE: use STATUS + print decimation for now (rate command optional)\r\n");
+    	uint32_t mhz = imu_app_get_rate_mhz();
+    	uart_cli_sendf("rate_hz=%lu.%03lu\r\n",
+    	               (unsigned long)(mhz/1000u),
+    	               (unsigned long)(mhz%1000u));
       return;
     }
 
-    uart_cli_send("usage: MPU WHOAMI|INIT|CFG|READ|STREAM ON|OFF|PRINT <N>|RATE\r\n");
+    if (argc >= 2 && strcmp(argv[1], "STATS") == 0) {
+      if (argc >= 3 && strcmp(argv[2], "RESET") == 0) {
+        imu_app_stats_reset();
+        uart_cli_send("ok\r\n");
+        return;
+      }
+
+      imu_stats_t st;
+      imu_app_get_stats(&st);
+
+      uart_cli_sendf("elapsed_ms=%lu stream=%u tick_due=%u print_div=%lu\r\n",
+                     (unsigned long)st.elapsed_ms,
+                     (unsigned)st.stream_en,
+                     (unsigned)st.tick_due,
+                     (unsigned long)imu_app_get_print_div());
+
+      uart_cli_sendf("ticks=%lu samples=%lu missed=%lu\r\n",
+                     (unsigned long)st.ticks,
+                     (unsigned long)st.samples,
+                     (unsigned long)st.missed);
+
+      uart_cli_sendf("rate_hz=%.2f dt_us(min/avg/max)=%lu/%lu/%lu\r\n",
+                     (double)st.rate_hz,
+                     (unsigned long)st.dt_min_us,
+                     (unsigned long)st.dt_avg_us,
+                     (unsigned long)st.dt_max_us);
+
+      uart_cli_sendf("svc_us(last/max)=%lu/%lu last_miss_tick=%lu\r\n",
+                     (unsigned long)st.svc_last_us,
+                     (unsigned long)st.svc_max_us,
+                     (unsigned long)st.last_miss_tick);
+
+      if (st.ticks > 0) {
+        uint32_t miss_ppm = (uint32_t)(((uint64_t)st.missed * 1000000ull) / (uint64_t)st.ticks);
+        uart_cli_sendf("miss_ppm=%lu\r\n", (unsigned long)miss_ppm);
+      }
+
+      return;
+    }
+
+    uart_cli_send("usage: MPU WHOAMI|INIT|CFG|READ|STREAM ON|OFF|PRINT <N>|RATE|STATS [RESET]\r\n");
     return;
   }
 

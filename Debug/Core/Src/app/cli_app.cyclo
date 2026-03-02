@@ -3,4 +3,4 @@
 ../Core/Src/app/cli_app.c:46:12:tokenize	9
 ../Core/Src/app/cli_app.c:67:17:parse_u32_auto	11
 ../Core/Src/app/cli_app.c:89:6:app_cli_print_banner	1
-../Core/Src/app/cli_app.c:102:6:app_cli_handle_line	43
+../Core/Src/app/cli_app.c:102:6:app_cli_handle_line	48

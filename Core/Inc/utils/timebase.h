@@ -1,13 +1,6 @@
-/*
- * timebase.h
- *
- *  Created on: Feb 26, 2026
- *      Author: aliha
- */
+#pragma once
+#include <stdint.h>
 
-#ifndef INC_UTILS_TIMEBASE_H_
-#define INC_UTILS_TIMEBASE_H_
-
-
-
-#endif /* INC_UTILS_TIMEBASE_H_ */
+void timebase_init(void);
+uint32_t timebase_cycles(void);                 // raw CYCCNT
+uint32_t timebase_cycles_to_us(uint32_t cyc);   // convert delta cycles -> us

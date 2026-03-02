@@ -3,13 +3,45 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-void imu_app_init(I2C_HandleTypeDef *hi2c);
-void imu_app_on_100hz_tick(void);   // call from TIM2 callback
-void imu_app_poll(void);            // call from main loop
+typedef struct {
+  uint32_t ticks;
+  uint32_t samples;
+  uint32_t missed;
 
-// control / stats
+  uint8_t  stream_en;
+  uint8_t  tick_due;
+
+  uint32_t svc_last_us;
+  uint32_t svc_max_us;
+  uint32_t last_miss_tick;
+
+  // dt between successful samples (microseconds)
+  uint32_t dt_min_us;
+  uint32_t dt_avg_us;
+  uint32_t dt_max_us;
+
+  // last computed rate (Hz)
+  float rate_hz;
+
+  // time since last reset
+  uint32_t elapsed_ms;
+} imu_stats_t;
+
+// Core app hooks
+void imu_app_init(I2C_HandleTypeDef *hi2c);
+void imu_app_on_100hz_tick(void); // call from TIM2 callback
+void imu_app_poll(void);          // call from main loop
+
+// control
 void imu_app_stream_set(bool en);
 bool imu_app_stream_get(void);
+
 void imu_app_set_print_div(uint32_t n); // print every n samples (0=off)
 uint32_t imu_app_get_print_div(void);
+
+
+// stats
 void imu_app_stats_reset(void);
+void imu_app_get_stats(imu_stats_t *out);
+float imu_app_get_rate_hz(void);
+uint32_t imu_app_get_rate_mhz(void);

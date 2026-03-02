@@ -21,10 +21,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <string.h>
 #include "drivers/uart_cli.h"
 #include "app/cli_app.h"
 #include "app/imu_app.h"
+#include "utils/timebase.h"
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -104,6 +105,7 @@ int main(void)
   HAL_TIM_Base_Start_IT(&htim2);
   app_cli_print_banner();
   uart_cli_init(&huart2);
+  timebase_init();
   imu_app_init(&hi2c1);
   /* USER CODE END 2 */
 

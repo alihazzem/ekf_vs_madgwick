@@ -30,7 +30,8 @@ Core/Src/app/imu_app.o: ../Core/Src/app/imu_app.c \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim.h \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h \
- ../Core/Inc/drivers/uart_cli.h ../Core/Inc/drivers/mpu6050.h
+ ../Core/Inc/drivers/uart_cli.h ../Core/Inc/drivers/mpu6050.h \
+ ../Core/Inc/utils/timebase.h
 ../Core/Inc/app/imu_app.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal.h:
 ../Core/Inc/stm32f4xx_hal_conf.h:
@@ -64,3 +65,4 @@ Core/Src/app/imu_app.o: ../Core/Src/app/imu_app.c \
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h:
 ../Core/Inc/drivers/uart_cli.h:
 ../Core/Inc/drivers/mpu6050.h:
+../Core/Inc/utils/timebase.h:

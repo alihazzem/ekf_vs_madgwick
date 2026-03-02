@@ -1,0 +1,3 @@
+../Core/Src/utils/timebase.c:4:6:timebase_init	4	static
+../Core/Src/utils/timebase.c:11:10:timebase_cycles	4	static
+../Core/Src/utils/timebase.c:16:10:timebase_cycles_to_us	16	static
