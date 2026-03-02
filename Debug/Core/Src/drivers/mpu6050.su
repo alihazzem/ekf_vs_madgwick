@@ -1,5 +1,0 @@
-../Core/Src/drivers/mpu6050.c:4:16:be16	16	static
-../Core/Src/drivers/mpu6050.c:8:18:mpu6050_whoami	40	static
-../Core/Src/drivers/mpu6050.c:20:18:mpu6050_init_100hz	40	static
-../Core/Src/drivers/mpu6050.c:62:18:mpu6050_read_cfg	40	static
-../Core/Src/drivers/mpu6050.c:90:18:mpu6050_read_raw	48	static

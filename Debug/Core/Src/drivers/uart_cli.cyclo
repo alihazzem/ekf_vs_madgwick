@@ -1,6 +1,0 @@
-../Core/Src/drivers/uart_cli.c:29:6:uart_cli_send	3
-../Core/Src/drivers/uart_cli.c:34:6:uart_cli_sendf	1
-../Core/Src/drivers/uart_cli.c:44:6:uart_cli_init	1
-../Core/Src/drivers/uart_cli.c:55:6:uart_cli_on_rx_byte	3
-../Core/Src/drivers/uart_cli.c:63:13:handle_char	11
-../Core/Src/drivers/uart_cli.c:103:6:uart_cli_poll	2
