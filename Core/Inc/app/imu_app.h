@@ -1,4 +1,5 @@
 #pragma once
+#include "app/imu_types.h"
 #include "stm32f4xx_hal.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -45,3 +46,13 @@ void imu_app_stats_reset(void);
 void imu_app_get_stats(imu_stats_t *out);
 float imu_app_get_rate_hz(void);
 uint32_t imu_app_get_rate_mhz(void);
+
+bool imu_app_get_madgwick(Attitude_t *out);
+void  imu_app_madgwick_reset(void);
+void  imu_app_madgwick_set_beta(float beta);
+float imu_app_madgwick_get_beta(void);
+
+// --- Gyro calibration (raw LSB offsets) ---
+void  imu_app_cal_clear(void);
+bool  imu_app_cal_get(int16_t *gx_off, int16_t *gy_off, int16_t *gz_off);
+bool  imu_app_cal_gyro(uint32_t duration_ms);   // blocking calibration

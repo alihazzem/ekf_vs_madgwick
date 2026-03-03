@@ -143,6 +143,12 @@ void app_cli_handle_line(const char *line)
     uart_cli_send("  MPU PRINT <N>\r\n");
     uart_cli_send("  MPU RATE\r\n");
     uart_cli_send("  MPU STATS [RESET]\r\n");
+    uart_cli_send("  MAD SHOW\r\n");
+    uart_cli_send("  MAD BETA <value>\r\n");
+    uart_cli_send("  MAD RESET\r\n");
+    uart_cli_send("  MPU CAL GYRO <ms>\r\n");
+    uart_cli_send("  MPU CAL SHOW\r\n");
+    uart_cli_send("  MPU CAL CLEAR\r\n");
     return;
   }
 
@@ -340,7 +346,100 @@ void app_cli_handle_line(const char *line)
       return;
     }
 
+    if (argc >= 2 && strcmp(argv[1], "CAL") == 0) {
+
+      if (argc >= 3 && strcmp(argv[2], "CLEAR") == 0) {
+        imu_app_cal_clear();
+        uart_cli_send("gyro offsets cleared\r\n");
+        return;
+      }
+
+      if (argc >= 3 && strcmp(argv[2], "SHOW") == 0) {
+        int16_t x, y, z;
+        if (imu_app_cal_get(&x, &y, &z)) {
+          uart_cli_sendf("gyro_off_raw=(%d %d %d)\r\n", x, y, z);
+        } else {
+          uart_cli_send("ERR\r\n");
+        }
+        return;
+      }
+
+      if (argc >= 4 && strcmp(argv[2], "GYRO") == 0) {
+        uint32_t ms = parse_u32_auto(argv[3]);
+
+        uart_cli_send("Calibrating gyro... keep still\r\n");
+
+        if (imu_app_cal_gyro(ms)) {
+          int16_t x, y, z;
+          imu_app_cal_get(&x, &y, &z);
+          uart_cli_sendf("done. offsets=(%d %d %d)\r\n", x, y, z);
+        } else {
+          uart_cli_send("ERR: calibration failed\r\n");
+        }
+        return;
+      }
+
+      uart_cli_send("usage: MPU CAL GYRO <ms> | MPU CAL SHOW | MPU CAL CLEAR\r\n");
+      return;
+    }
+
     uart_cli_send("usage: MPU WHOAMI|INIT|CFG|READ|STREAM ON|OFF|PRINT <N>|RATE|STATS [RESET]\r\n");
+    return;
+  }
+
+  /* ─────────── Madgwick commands ─────────── */
+  if (strcmp(argv[0], "MAD") == 0) {
+
+	  if (argc >= 2 && strcmp(argv[1], "SHOW") == 0) {
+	    Attitude_t a;
+	    if (!imu_app_get_madgwick(&a)) {
+	      uart_cli_send("ERR: madgwick not ready (enable MPU STREAM ON)\r\n");
+	      return;
+	    }
+
+	    // fixed-point helpers (no float printf)
+	    int32_t q0 = (int32_t)(a.q0 * 1000000.0f);
+	    int32_t q1 = (int32_t)(a.q1 * 1000000.0f);
+	    int32_t q2 = (int32_t)(a.q2 * 1000000.0f);
+	    int32_t q3 = (int32_t)(a.q3 * 1000000.0f);
+
+	    int32_t r  = (int32_t)(a.roll_deg  * 1000.0f);
+	    int32_t p  = (int32_t)(-a.pitch_deg * 1000.0f);
+	    int32_t y  = (int32_t)(a.yaw_deg   * 1000.0f);
+
+	    uart_cli_sendf("q_1e6=(%ld %ld %ld %ld)\r\n",
+	                   (long)q0, (long)q1, (long)q2, (long)q3);
+
+	    uart_cli_sendf("rpy_mdeg=(%ld %ld %ld)\r\n",
+	                   (long)r, (long)p, (long)y);
+	    return;
+	  }
+
+    if (argc >= 3 && strcmp(argv[1], "BETA") == 0) {
+      // allow float like 0.08
+      float beta = (float)strtod(argv[2], NULL);
+      if (beta <= 0.0f || beta > 5.0f) {
+        uart_cli_send("ERR: beta range (0..5]\r\n");
+        return;
+      }
+      imu_app_madgwick_set_beta(beta);
+      uart_cli_sendf("ok beta=%.4f\r\n", (double)imu_app_madgwick_get_beta());
+      return;
+    }
+
+    if (argc >= 2 && strcmp(argv[1], "RESET") == 0) {
+      imu_app_madgwick_reset();
+      uart_cli_send("ok\r\n");
+      return;
+    }
+
+    if (argc >= 2 && strcmp(argv[1], "RESET") == 0) {
+      // We will wire reset in imu_app next (simple wrapper)
+      uart_cli_send("ERR: RESET not wired yet\r\n");
+      return;
+    }
+
+    uart_cli_send("usage: MAD SHOW | MAD BETA <value> | MAD RESET\r\n");
     return;
   }
 

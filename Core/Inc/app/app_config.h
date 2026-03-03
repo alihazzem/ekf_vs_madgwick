@@ -7,7 +7,7 @@
 
 /* ====== ENABLE/DISABLE FILTERS ====== */
 #define RUN_MADGWICK       1
-#define RUN_EKF            1
+#define RUN_EKF            0
 
 /* ====== LOGGING ====== */
 #define LOG_UART           1    // 1 = UART, 0 = SWO (later)
@@ -18,6 +18,10 @@
 
 /* ====== MPU6050 SETTINGS ====== */
 #define MPU6050_ADDR_7BIT  0x68   // AD0=0 -> 0x68, AD0=1 -> 0x69
+
+#define MADGWICK_ACCEL_REJECT_EN   1
+#define MADGWICK_ACCEL_MIN_G       0.85f
+#define MADGWICK_ACCEL_MAX_G       1.15f
 
 /* ====== AXIS REMAP (we will fill exact mapping later) ======
    Put +1 or -1 and select axes mapping in code after we confirm your final Arduino remap.
