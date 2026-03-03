@@ -433,12 +433,6 @@ void app_cli_handle_line(const char *line)
       return;
     }
 
-    if (argc >= 2 && strcmp(argv[1], "RESET") == 0) {
-      // We will wire reset in imu_app next (simple wrapper)
-      uart_cli_send("ERR: RESET not wired yet\r\n");
-      return;
-    }
-
     uart_cli_send("usage: MAD SHOW | MAD BETA <value> | MAD RESET\r\n");
     return;
   }

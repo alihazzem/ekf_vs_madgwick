@@ -28,7 +28,8 @@ extern void app_cli_handle_line(const char *line);
 // ───────────── TX ─────────────
 void uart_cli_send(const char *s) {
   if (!s_huart || !s) return;
-  HAL_UART_Transmit(s_huart, (uint8_t*)s, (uint16_t)strlen(s), 1000);
+  // Blocking TX – replace with DMA if streaming rate increases
+  HAL_UART_Transmit(s_huart, (uint8_t*)s, (uint16_t)strlen(s), 50);
 }
 
 void uart_cli_sendf(const char *fmt, ...) {

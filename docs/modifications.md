@@ -4,42 +4,19 @@ Review of the full `ekf_madgwick_comparsion` codebase.
 
 ---
 
-## 1. BUG — Duplicate Dead `MAD RESET` Handler (cli_app.c)
+## 1. ~~BUG~~ ✅ FIXED — Duplicate Dead `MAD RESET` Handler (cli_app.c)
 
-**File:** `Core/Src/app/cli_app.c` lines ~422–433
+**File:** `Core/Src/app/cli_app.c`
 
-The `MAD RESET` command is handled **twice**. The second block is unreachable dead code that still contains a stale `"ERR: RESET not wired yet"` message from an earlier stage of development:
-
-```c
-// FIRST handler (correct — this one runs)
-if (argc >= 2 && strcmp(argv[1], "RESET") == 0) {
-    imu_app_madgwick_reset();
-    uart_cli_send("ok\r\n");
-    return;
-}
-
-// SECOND handler (DEAD CODE — never reached)
-if (argc >= 2 && strcmp(argv[1], "RESET") == 0) {
-    uart_cli_send("ERR: RESET not wired yet\r\n");
-    return;
-}
-```
-
-**Fix:** Delete the second (dead) `MAD RESET` block entirely.
+The second (dead) `MAD RESET` block that printed `"ERR: RESET not wired yet"` has been removed. Only one handler exists now.
 
 ---
 
-## 2. BUG — Pitch Sign Negated in `MAD SHOW` Output (cli_app.c)
+## 2. ✅ INTENTIONAL — Pitch Sign Negated in `MAD SHOW` Output (cli_app.c)
 
-**File:** `Core/Src/app/cli_app.c` ~line 414
+**File:** `Core/Src/app/cli_app.c`
 
-```c
-int32_t p = (int32_t)(-a.pitch_deg * 1000.0f);   // <-- unexplained negation
-```
-
-Roll and yaw are printed as-is, but pitch is silently negated. If this is intentional (NED vs. ENU convention), it should be documented with a comment. If not, it's a sign error that will confuse logging/comparison.
-
-**Fix:** Either remove the negation or add a clear comment explaining the convention choice.
+The pitch negation (`-a.pitch_deg`) is intentional — confirmed by user. It matches the physical convention where forward tilt produces a positive reported pitch. The stream output in `imu_app.c` follows the same convention for consistency.
 
 ---
 
@@ -57,13 +34,11 @@ This variable is declared but **never read or written** anywhere in the codebase
 
 ---
 
-## 4. ISSUE — EKF Filter Is Completely Unimplemented
+## 4. ✅ IN PROGRESS — EKF Filter Is Completely Unimplemented
 
 **Files:** `Core/Src/filters/ekf.c`, `Core/Inc/filters/ekf.h`
 
-Both files are empty stubs. The project is named "EKF vs Madgwick comparison" and `app_config.h` defines `RUN_EKF 0`, but there is **zero** EKF code. The `FusionOut_t` type in `imu_types.h` has an `ekf` field and `ekf_acc_used` that are never populated.
-
-**Fix:** Implement the EKF or, at minimum, add a `TODO` / `#warning` in `ekf.c` so this isn't silently forgotten.
+Both files are empty stubs. The full EKF implementation plan is documented in `docs/madgwick_review_and_ekf_plan.md`. Madgwick has been validated with live hardware; EKF is the next step.
 
 ---
 
@@ -191,18 +166,18 @@ The project folder and several files use `comparsion` instead of `comparison`.
 
 ## Summary Table
 
-| # | Severity | File | Issue |
-|---|----------|------|-------|
-| 1 | **Bug** | cli_app.c | Duplicate dead `MAD RESET` handler |
-| 2 | **Bug** | cli_app.c | Pitch sign silently negated in `MAD SHOW` |
-| 3 | Minor | main.c | Unused `imu_tick` variable |
-| 4 | Major | ekf.c/h | EKF completely unimplemented |
-| 5 | Minor | uart_logger, app_imu_task | Empty stub files |
-| 6 | Perf | uart_cli.c | Blocking UART TX stalls main loop |
-| 7 | Perf | cli_app.c | O(n²) `trim_inplace` |
-| 8 | Robust | imu_app / cli | No MPU init guard before streaming |
-| 9 | Robust | imu_app.c | `__disable_irq` too broad; unsafe nesting |
-| 10 | Robust | system | No watchdog |
-| 11 | Minor | ringbuf / uart_cli | Silent RX overflow drops |
-| 12 | Minor | uart_cli.c | TX format buffer truncation at 256 |
-| 13 | Cosmetic | project | "comparsion" typo |
+| # | Severity | File | Issue | Status |
+|---|----------|------|-------|--------|
+| 1 | **Bug** | cli_app.c | Duplicate dead `MAD RESET` handler | ✅ Fixed |
+| 2 | **Bug** | cli_app.c | Pitch sign negated in `MAD SHOW` | ✅ Intentional |
+| 3 | Minor | main.c | Unused `imu_tick` variable | Open |
+| 4 | Major | ekf.c/h | EKF completely unimplemented | 🔄 In progress |
+| 5 | Minor | uart_logger, app_imu_task | Empty stub files | Open |
+| 6 | Perf | uart_cli.c | Blocking UART TX stalls main loop | Open |
+| 7 | Perf | cli_app.c | O(n²) `trim_inplace` | Open |
+| 8 | Robust | imu_app / cli | No MPU init guard before streaming | Open (capture.py auto-sends `MPU INIT`) |
+| 9 | Robust | imu_app.c | `__disable_irq` too broad; unsafe nesting | Open |
+| 10 | Robust | system | No watchdog | Open |
+| 11 | Minor | ringbuf / uart_cli | Silent RX overflow drops | Open |
+| 12 | Minor | uart_cli.c | TX format buffer truncation at 256 | Open |
+| 13 | Cosmetic | project | "comparsion" typo | Open |

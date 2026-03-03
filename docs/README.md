@@ -6,8 +6,8 @@ This is a **bare-metal STM32F411CEU6** firmware project that reads 6-axis IMU da
 
 | Filter | Status | Description |
 |--------|--------|-------------|
-| **Madgwick** | ✅ Implemented | Gradient-descent complementary filter using quaternion representation |
-| **EKF** | 🚧 Placeholder | Extended Kalman Filter (headers and source stubs created, not yet implemented) |
+| **Madgwick** | ✅ Implemented + Enhanced | Gradient-descent complementary filter. Additions: online gyro-bias estimation (zeta), gravity-based initial alignment, adaptive beta ramp |
+| **EKF** | 🔧 Planned | Extended Kalman Filter — implementation plan in `docs/madgwick_review_and_ekf_plan.md`. Madgwick validated on hardware first. |
 
 The firmware exposes a **UART-based interactive CLI** (command-line interface) at 115200 baud, allowing real-time control, calibration, diagnostics, and data streaming — making it ideal for development, tuning, and live comparison.
 
@@ -79,7 +79,7 @@ Period      = 99    → overflow = 10 kHz / 100 = 100 Hz
 2. **Init** — `uart_cli_init()` arms UART RX interrupt; `timebase_init()` enables DWT cycle counter; `imu_app_init()` initializes Madgwick filter state.
 3. **Super-loop** — `while(1)` alternates between:
    - `uart_cli_poll()` — drains the RX ring buffer, assembles lines, dispatches to `app_cli_handle_line()`.
-   - `imu_app_poll()` — if `s_tick_due` flag is set (by TIM2 ISR), reads MPU6050, converts units, remaps axes, runs the Madgwick filter, updates stats.
+   - `imu_app_poll()` — if `s_tick_due` flag is set (by TIM2 ISR), reads MPU6050, converts units, remaps axes, runs the Madgwick filter, updates stats, and streams a CSV line prefixed with `D,` when streaming is enabled.
 4. **TIM2 ISR** — fires at 100 Hz, calls `imu_app_on_100hz_tick()` which sets `s_tick_due = true`. If the previous tick wasn't serviced yet, it increments a missed-tick counter.
 5. **UART RX ISR** — `HAL_UART_RxCpltCallback()` pushes each received byte into a ring buffer via `uart_cli_on_rx_byte()`.
 
@@ -137,6 +137,11 @@ ekf_madgwick_comparsion/
 │   └── STM32F4xx_HAL_Driver/       # STM32F4 HAL source and headers
 ├── Debug/                          # Build output (makefile, .o, .list, .map)
 ├── docs/                           # ← You are here — project documentation
+├── scripts/
+│   └── capture.py                  # Python UART capture script — auto-init, gyro cal, CSV output
+├── matlab/
+│   ├── plot_imu.m                  # MATLAB plot script — 3-subplot: accel / gyro / Madgwick angles
+│   └── raw_vs_madgwick.csv         # Example captured CSV (gitignored in production)
 ├── ekf_madgwick_comparsion.ioc     # STM32CubeMX project file
 ├── STM32F411CEUX_FLASH.ld          # Linker script (flash)
 └── STM32F411CEUX_RAM.ld            # Linker script (RAM)
