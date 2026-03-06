@@ -15,7 +15,7 @@ The **central application module** that orchestrates the entire IMU pipeline.
 - Converts raw sensor data to physical units (g for accel, rad/s for gyro)
 - Applies gyro bias calibration offsets
 - Remaps sensor axes to the desired body frame
-- Feeds corrected data into the Madgwick filter
+- Feeds corrected data into both the Madgwick and EKF filters
 - Tracks real-time statistics (sample rate, dt jitter, missed ticks, service time)
 
 **Key API:**
@@ -36,6 +36,12 @@ The **central application module** that orchestrates the entire IMU pipeline.
 | `imu_app_madgwick_reset()` | Reset quaternion to identity `[1, 0, 0, 0]` |
 | `imu_app_madgwick_set_beta(beta)` | Change Madgwick gain at runtime |
 | `imu_app_madgwick_get_beta()` | Read current beta |
+| `imu_app_get_ekf(out)` | Copy latest EKF attitude (quaternion + Euler) to caller |
+| `imu_app_ekf_reset()` | Reset EKF to identity quaternion, zero bias, P = P0·I |
+| `imu_app_ekf_set_noise(sg, sb, sa, k)` | Update EKF noise params at runtime |
+| `imu_app_ekf_trace_p()` | Read EKF covariance trace (convergence metric) |
+| `imu_app_ekf_get_bias(bx, by, bz)` | Read current gyro bias estimate (rad/s) |
+| `imu_app_ekf_last_us()` | Read last EKF step time (µs) |
 | `imu_app_cal_gyro(duration_ms)` | Blocking gyro calibration (averages raw gyro while stationary) |
 | `imu_app_cal_get(gx, gy, gz)` | Read current gyro offsets (raw LSB) |
 | `imu_app_cal_clear()` | Zero out gyro offsets |
@@ -180,7 +186,23 @@ See [Madgwick Filter Details](madgwick_filter.md) for the full algorithm writeup
 
 ### `ekf.c` / `ekf.h`
 
-**Stub** — placeholder for Extended Kalman Filter implementation. Both files contain only the include guard.
+**7-state Extended Kalman Filter** for attitude estimation. State vector: `[q0, q1, q2, q3, bx, by, bz]` — unit quaternion plus gyro bias.
+
+**Key API:**
+
+| Function | Description |
+|----------|-------------|
+| `ekf7_init(e, sg, sb, sa, k, P0)` | Initialise with noise parameters and initial covariance |
+| `ekf7_reset(e)` | Reset to identity quaternion, zero bias, P = P0·I |
+| `ekf7_init_from_accel(e, ax, ay, az)` | Align initial roll/pitch from first gravity reading |
+| `ekf7_predict(e, wx, wy, wz, dt)` | Gyro-driven time update — propagates q and P via 7×7 Jacobian |
+| `ekf7_update_accel(e, ax, ay, az)` | Accelerometer correction with adaptive-R and optional hard-reject |
+| `ekf7_step(e, wx, wy, wz, ax, ay, az, dt)` | Convenience: predict then update |
+| `ekf7_set_noise(e, sg, sb, sa, k)` | Update noise parameters at runtime |
+| `ekf7_set_accel_reject(e, en, min, max)` | Configure hard-reject magnitude window |
+| `ekf7_trace_P(e)` | Return trace(P) as a convergence health metric |
+| `ekf7_get_quat(e, q_out)` | Copy current quaternion |
+| `ekf7_get_bias(e, b_out)` | Copy current gyro bias estimate |
 
 ---
 
@@ -249,10 +271,20 @@ Compile-time constants that control the entire system:
 | `IMU_FS_HZ` | `100.0f` | Target sample rate (Hz) |
 | `IMU_DT_S` | `0.01f` | Nominal dt (1/Fs) |
 | `RUN_MADGWICK` | `1` | Enable Madgwick filter (preprocessor gate) |
-| `RUN_EKF` | `0` | Enable EKF filter (preprocessor gate) |
+| `RUN_EKF` | `1` | Enable EKF filter (preprocessor gate) |
 | `LOG_UART` | `1` | Use UART for logging (vs SWO) |
 | `LOG_HEADER_ONCE` | `1` | Print CSV header once at start |
 | `MADGWICK_BETA` | `0.08f` | Default Madgwick gain |
+| `MADGWICK_BETA_START` | `0.5f` | Initial beta for fast convergence ramp |
+| `MADGWICK_BETA_DECAY_S` | `2.0f` | Seconds to ramp from BETA_START to BETA |
+| `MADGWICK_ZETA` | `0.015f` | Madgwick online gyro-bias gain |
+| `MADGWICK_BETA_MOTION_K` | `10.0f` | Motion-adaptive beta scaling coefficient |
+| `MADGWICK_BETA_MIN` | `0.01f` | Beta floor during dynamic motion |
+| `EKF_SIGMA_GYRO` | `0.01f` | EKF gyro noise density (rad/s/√Hz) |
+| `EKF_SIGMA_BIAS` | `2e-5f` | EKF bias random-walk (rad/s²/√Hz) |
+| `EKF_SIGMA_ACCEL` | `0.05f` | EKF accel noise density (g/√Hz) |
+| `EKF_R_ADAPT_K` | `200.0f` | Adaptive-R steepness — R scales as `σ²·(1 + k·dev²)` |
+| `EKF_P0` | `1.0f` | Initial P diagonal (high = uncertain → fast initial convergence) |
 | `MPU6050_ADDR_7BIT` | `0x68` | I2C 7-bit address (AD0=0) |
 | `MADGWICK_ACCEL_REJECT_EN` | `1` | Enable accel magnitude rejection |
 | `MADGWICK_ACCEL_MIN_G` | `0.85f` | Lower bound for accel norm acceptance |

@@ -3,6 +3,7 @@
 #include "drivers/mpu6050.h"
 #include "utils/timebase.h"
 #include "filters/madgwick.h"
+#include "filters/ekf.h"
 #include "utils/math3d.h"
 #include "app/imu_types.h"
 #include "app/app_config.h"
@@ -43,7 +44,15 @@ static uint32_t s_last_rate_mhz = 0;
 static madgwick_t s_mad;
 static Attitude_t s_mad_att;
 static uint8_t s_mad_valid = 0;
-static uint8_t s_mad_aligned = 0; // set to 1 after first-sample gravity alignment
+static uint8_t s_mad_aligned = 0;  // set to 1 after first-sample gravity alignment
+static uint32_t s_mad_last_us = 0; // CPU time of last Madgwick step
+
+// EKF state/output
+static ekf7_t s_ekf;
+static Attitude_t s_ekf_att;
+static uint8_t s_ekf_valid = 0;
+static uint8_t s_ekf_aligned = 0;  // set to 1 after first-sample gravity alignment
+static uint32_t s_ekf_last_us = 0; // CPU time of last EKF step
 
 // --- Gyro raw offsets ---
 static int16_t s_gx_off = 0;
@@ -67,9 +76,19 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
                             MADGWICK_ACCEL_MAX_G);
   madgwick_set_bias_gain(&s_mad, MADGWICK_ZETA);
   madgwick_set_adaptive_beta(&s_mad, MADGWICK_BETA_START, MADGWICK_BETA_DECAY_S);
+  madgwick_set_motion_gain(&s_mad, MADGWICK_BETA_MOTION_K, MADGWICK_BETA_MIN);
 
   s_mad_valid = 0;
   s_mad_aligned = 0;
+
+#if RUN_EKF
+  ekf7_init(&s_ekf, EKF_SIGMA_GYRO, EKF_SIGMA_BIAS, EKF_SIGMA_ACCEL,
+            EKF_R_ADAPT_K, EKF_P0);
+  /* Hard-reject window disabled — adaptive R handles dynamics gracefully */
+  ekf7_set_accel_reject(&s_ekf, true, 0.85f, 1.15f);
+  s_ekf_valid = 0;
+  s_ekf_aligned = 0;
+#endif
 }
 
 void imu_app_on_100hz_tick(void)
@@ -165,48 +184,37 @@ void imu_app_poll(void)
     float wy_s = ((float)gy_corr / GYRO_LSB_PER_DPS) * DEG2RAD;
     float wz_s = ((float)gz_corr / GYRO_LSB_PER_DPS) * DEG2RAD;
 
-    // ---- REMAP sensor -> body (final: permutation + sign + X/Y swap) ----
-    // Base permutation from 3-pose:
-    //   candidate X = Z_sensor
-    //   candidate Y = Y_sensor
-    //   Z_body      = X_sensor
-    float bx = az_s; // candidate X
-    float by = ay_s; // candidate Y
-    float bz = ax_s; // Z
+    // ---- REMAP sensor -> body (defined in app_config.h) ----
+    float ax_g = REMAP_AX_G(ax_s, ay_s, az_s);
+    float ay_g = REMAP_AY_G(ax_s, ay_s, az_s);
+    float az_g = REMAP_AZ_G(ax_s, ay_s, az_s);
 
-    float gx = wz_s; // candidate wx
-    float gy = wy_s; // candidate wy
-    float gz = wx_s; // wz
-
-    // Sign fixes found from tests:
-    bx = -bx;
-    gx = -gx; // flip candidate X
-    by = -by;
-    gy = -gy; // flip candidate Y
-    // bz, gz unchanged
-
-    // Swap X and Y to match your physical tilt directions:
-    float ax_g = by;
-    float ay_g = bx;
-    float az_g = bz;
-
-    float wx = gy;
-    float wy = gx;
-    float wz = gz;
-    // ---- First-sample gravity alignment ----
-    // On the very first valid sample, initialise the quaternion from the
-    // accelerometer so roll/pitch are correct immediately (no cold-start drift).
+    float wx = REMAP_WX(wx_s, wy_s, wz_s);
+    float wy = REMAP_WY(wx_s, wy_s, wz_s);
+    float wz = REMAP_WZ(wx_s, wy_s, wz_s);
+    // ---- First-sample gravity alignment (both filters) ----
+    // On the very first valid sample initialise each filter's quaternion from
+    // the accelerometer so roll/pitch are correct immediately.
     if (!s_mad_aligned)
     {
       madgwick_init_from_accel(&s_mad, ax_g, ay_g, az_g);
       s_mad_aligned = 1;
     }
+#if RUN_EKF
+    if (!s_ekf_aligned)
+    {
+      ekf7_init_from_accel(&s_ekf, ax_g, ay_g, az_g);
+      s_ekf_aligned = 1;
+    }
+#endif
+
     // ---- Madgwick update (body-frame inputs, measured dt) ----
 #if RUN_MADGWICK
     if (dt_s > 0.0f)
     {
-
+      uint32_t t_mad0 = timebase_cycles();
       madgwick_update_imu(&s_mad, wx, wy, wz, ax_g, ay_g, az_g, dt_s);
+      s_mad_last_us = timebase_cycles_to_us(timebase_cycles() - t_mad0);
 
       s_mad_att.q0 = s_mad.q0;
       s_mad_att.q1 = s_mad.q1;
@@ -218,26 +226,84 @@ void imu_app_poll(void)
       s_mad_valid = 1;
     }
 #else
-    (void)dt_s; // avoid unused warning if you ever compile w/o madgwick
+    (void)dt_s; // avoid unused warning when compiling without Madgwick
 #endif
 
-    // optional streaming print (decimated)
-    // Format: D,<t_ms>,<ax>,<ay>,<az>,<gx>,<gy>,<gz>,<roll_mdeg>,<pitch_mdeg>,<yaw_mdeg>
-    // - Raw values are int16 sensor counts (convert in post: accel /16384 = g, gyro /131 = dps)
-    // - Angles are Madgwick output in millidegrees (0 when filter not yet valid)
-    // - pitch is negated to match MAD SHOW convention
-    // - "D," prefix lets the capture script ignore CLI chatter lines
+    // ---- EKF update (body-frame inputs, measured dt) ----
+#if RUN_EKF
+    if (dt_s > 0.0f)
+    {
+      uint32_t t_ekf0 = timebase_cycles();
+      ekf7_step(&s_ekf, wx, wy, wz, ax_g, ay_g, az_g, dt_s);
+      s_ekf_last_us = timebase_cycles_to_us(timebase_cycles() - t_ekf0);
+
+      float q_tmp[4];
+      ekf7_get_quat(&s_ekf, q_tmp);
+      s_ekf_att.q0 = q_tmp[0];
+      s_ekf_att.q1 = q_tmp[1];
+      s_ekf_att.q2 = q_tmp[2];
+      s_ekf_att.q3 = q_tmp[3];
+      math3d_quat_to_euler_deg(s_ekf_att.q0, s_ekf_att.q1, s_ekf_att.q2, s_ekf_att.q3,
+                               &s_ekf_att.roll_deg, &s_ekf_att.pitch_deg, &s_ekf_att.yaw_deg);
+      s_ekf_valid = 1;
+    }
+#endif
+
+    // ---- optional streaming print (decimated) ----
+    // CSV format (20 fields):
+    //  D, t_ms,
+    //  ax_raw, ay_raw, az_raw, gx_raw, gy_raw, gz_raw,  (int16 sensor counts)
+    //  mad_roll_mdeg, mad_pitch_mdeg, mad_yaw_mdeg,      (Madgwick output, mdeg)
+    //  mad_us,                                           (Madgwick step CPU time µs)
+    //  ekf_roll_mdeg, ekf_pitch_mdeg, ekf_yaw_mdeg,      (EKF output, mdeg)
+    //  traceP_1e6,                                       (EKF trace(P) * 1e6)
+    //  ekf_us,                                           (EKF step CPU time µs)
+    //  bx_uradps, by_uradps, bz_uradps                  (EKF bias µrad/s)
+    //
+    // Columns are 0 when the respective filter is disabled or not yet valid.
+    // The "D," prefix lets capture scripts ignore CLI chatter lines.
     if (s_print_div != 0 && (s_sample_count % s_print_div) == 0)
     {
-      int32_t roll_md = s_mad_valid ? (int32_t)(s_mad_att.roll_deg * 1000.0f) : 0;
-      int32_t pitch_md = s_mad_valid ? (int32_t)(-s_mad_att.pitch_deg * 1000.0f) : 0;
-      int32_t yaw_md = s_mad_valid ? (int32_t)(s_mad_att.yaw_deg * 1000.0f) : 0;
+      // Madgwick fields
+      int32_t mad_r = s_mad_valid ? (int32_t)(s_mad_att.roll_deg * 1000.0f) : 0;
+      int32_t mad_p = s_mad_valid ? (int32_t)(-s_mad_att.pitch_deg * 1000.0f) : 0;
+      int32_t mad_y = s_mad_valid ? (int32_t)(s_mad_att.yaw_deg * 1000.0f) : 0;
 
-      uart_cli_sendf("D,%lu,%d,%d,%d,%d,%d,%d,%ld,%ld,%ld\r\n",
+      // EKF fields
+      int32_t ekf_r = s_ekf_valid ? (int32_t)(s_ekf_att.roll_deg * 1000.0f) : 0;
+      int32_t ekf_p = s_ekf_valid ? (int32_t)(-s_ekf_att.pitch_deg * 1000.0f) : 0;
+      int32_t ekf_y = s_ekf_valid ? (int32_t)(s_ekf_att.yaw_deg * 1000.0f) : 0;
+      int32_t traceP = s_ekf_valid ? (int32_t)(ekf7_trace_P(&s_ekf) * 1e6f) : 0;
+
+      float bx_f = 0.0f, by_f = 0.0f, bz_f = 0.0f;
+#if RUN_EKF
+      {
+        float b_tmp[3] = {0.0f, 0.0f, 0.0f};
+        ekf7_get_bias(&s_ekf, b_tmp);
+        bx_f = b_tmp[0]; by_f = b_tmp[1]; bz_f = b_tmp[2];
+      }
+#endif
+      int32_t bx_ur = (int32_t)(bx_f * 1e6f); // µrad/s
+      int32_t by_ur = (int32_t)(by_f * 1e6f);
+      int32_t bz_ur = (int32_t)(bz_f * 1e6f);
+
+      uart_cli_sendf("D,%lu,%d,%d,%d,%d,%d,%d,"
+                     "%ld,%ld,%ld,%lu,"
+                     "%ld,%ld,%ld,%ld,%lu,"
+                     "%ld,%ld,%ld\r\n",
+                     /* time */
                      (unsigned long)HAL_GetTick(),
+                     /* raw sensor */
                      (int)s_last.ax, (int)s_last.ay, (int)s_last.az,
                      (int)s_last.gx, (int)s_last.gy, (int)s_last.gz,
-                     (long)roll_md, (long)pitch_md, (long)yaw_md);
+                     /* Madgwick */
+                     (long)mad_r, (long)mad_p, (long)mad_y,
+                     (unsigned long)s_mad_last_us,
+                     /* EKF */
+                     (long)ekf_r, (long)ekf_p, (long)ekf_y,
+                     (long)traceP, (unsigned long)s_ekf_last_us,
+                     /* EKF bias */
+                     (long)bx_ur, (long)by_ur, (long)bz_ur);
     }
   }
   else
@@ -302,6 +368,10 @@ void imu_app_stats_reset(void)
   // reset Madgwick output validity and alignment flag
   s_mad_valid = 0;
   s_mad_aligned = 0;
+
+  // reset EKF output validity and alignment flag
+  s_ekf_valid = 0;
+  s_ekf_aligned = 0;
 }
 
 // integer rate getter (recommended for printing)
@@ -458,4 +528,77 @@ bool imu_app_cal_gyro(uint32_t duration_ms)
   s_gz_off = (int16_t)(sum_z / (int64_t)count);
 
   return true;
+}
+
+// ------------------------------------------------------------
+// Madgwick timing
+// ------------------------------------------------------------
+
+uint32_t imu_app_mad_last_us(void)
+{
+  return s_mad_last_us;
+}
+
+// ------------------------------------------------------------
+// EKF getters / setters
+// ------------------------------------------------------------
+
+bool imu_app_get_ekf(Attitude_t *out)
+{
+  if (!out)
+    return false;
+
+  __disable_irq();
+  uint8_t valid = s_ekf_valid;
+  Attitude_t tmp = s_ekf_att;
+  __enable_irq();
+
+  if (!valid)
+    return false;
+  *out = tmp;
+  return true;
+}
+
+void imu_app_ekf_reset(void)
+{
+  __disable_irq();
+  ekf7_reset(&s_ekf);
+  s_ekf_valid = 0;
+  s_ekf_aligned = 0; // will re-align from accel on next sample
+  __enable_irq();
+}
+
+void imu_app_ekf_set_noise(float sigma_gyro, float sigma_bias,
+                           float sigma_accel, float r_adapt_k)
+{
+  __disable_irq();
+  ekf7_set_noise(&s_ekf, sigma_gyro, sigma_bias, sigma_accel, r_adapt_k);
+  __enable_irq();
+}
+
+float imu_app_ekf_trace_p(void)
+{
+  float tr;
+  __disable_irq();
+  tr = ekf7_trace_P(&s_ekf);
+  __enable_irq();
+  return tr;
+}
+
+void imu_app_ekf_get_bias(float *bx, float *by, float *bz)
+{
+  if (!bx || !by || !bz)
+    return;
+  float b[3];
+  __disable_irq();
+  ekf7_get_bias(&s_ekf, b);
+  __enable_irq();
+  *bx = b[0];
+  *by = b[1];
+  *bz = b[2];
+}
+
+uint32_t imu_app_ekf_last_us(void)
+{
+  return s_ekf_last_us;
 }

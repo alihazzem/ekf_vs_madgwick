@@ -30,6 +30,10 @@ void madgwick_init(madgwick_t *m, float beta)
   m->elapsed_s = 0.0f;
   m->beta_start = beta;   // identical => no ramp effect
   m->beta_decay_s = 0.0f; // 0 => disabled
+
+  // motion-adaptive beta — disabled by default
+  m->beta_motion_k = 0.0f;
+  m->beta_min = 0.0f;
 }
 
 void madgwick_reset(madgwick_t *m)
@@ -84,6 +88,14 @@ void madgwick_set_adaptive_beta(madgwick_t *m, float beta_start, float beta_deca
     return;
   m->beta_start = beta_start;
   m->beta_decay_s = beta_decay_s;
+}
+
+void madgwick_set_motion_gain(madgwick_t *m, float motion_k, float beta_min)
+{
+  if (!m)
+    return;
+  m->beta_motion_k = motion_k;
+  m->beta_min = beta_min;
 }
 
 void madgwick_init_from_accel(madgwick_t *m, float ax, float ay, float az)
@@ -170,20 +182,33 @@ void madgwick_update_imu(madgwick_t *m,
   wy -= m->gby;
   wz -= m->gbz;
 
-  // ---- 4. accel magnitude check (optional) ----
+  // ---- 4. accel magnitude (computed once — reused below) ----
+  float a2 = ax_g * ax_g + ay_g * ay_g + az_g * az_g;
+  float a_mag = math3d_sqrtf(a2);
+
+  // ----  motion-adaptive beta: reduce correction gain during dynamics ----
+  // beta_eff /= (1 + k * (|a| - 1)^2)   Mirror of EKF's adaptive R.
+  if (m->beta_motion_k > 0.0f)
+  {
+    float dev = a_mag - 1.0f;
+    beta_eff /= (1.0f + m->beta_motion_k * dev * dev);
+  }
+  // beta floor: prevent the filter from becoming a pure gyro integrator
+  if (beta_eff < m->beta_min)
+    beta_eff = m->beta_min;
+
+  // ---- 5. hard reject — uses precomputed a_mag ----
   if (m->accel_reject_en)
   {
-    float an = math3d_sqrtf(ax_g * ax_g + ay_g * ay_g + az_g * az_g);
-    if (!(an >= m->accel_reject_min_g && an <= m->accel_reject_max_g))
+    if (!(a_mag >= m->accel_reject_min_g && a_mag <= m->accel_reject_max_g))
     {
       integrate_gyro_only(m, wx, wy, wz, dt_s);
       return;
     }
   }
 
-  // ---- 5. normalize accel ----
+  // ---- 6. normalize accel — uses precomputed a2 ----
   float ax = ax_g, ay = ay_g, az = az_g;
-  float a2 = ax * ax + ay * ay + az * az;
 
   if (a2 < MADGWICK_EPS)
   {
@@ -214,7 +239,7 @@ void madgwick_update_imu(madgwick_t *m,
   const float q2q2 = q2 * q2;
   const float q3q3 = q3 * q3;
 
-  // ---- 6. gradient step ----
+  // ---- 7. gradient step ----
   float s0 = _4q0 * q2q2 + _2q2 * ax + _4q0 * q1q1 - _2q1 * ay;
   float s1 = _4q1 * q3q3 - _2q3 * ax + 4.0f * q0q0 * q1 - _2q0 * ay - _4q1 + _8q1 * q1q1 + _8q1 * q2q2 + _4q1 * az;
   float s2 = 4.0f * q0q0 * q2 + _2q0 * ax + _4q2 * q3q3 - _2q3 * ay - _4q2 + _8q2 * q1q1 + _8q2 * q2q2 + _4q2 * az;
@@ -234,7 +259,7 @@ void madgwick_update_imu(madgwick_t *m,
     s0 = s1 = s2 = s3 = 0.0f;
   }
 
-  // ---- 7. gyro bias update (uses normalised gradient, only when accel contributes) ----
+  // ---- 8. gyro bias update (uses normalised gradient, only when accel contributes) ----
   if (m->zeta > 0.0f)
   {
     m->gbx += 2.0f * dt_s * m->zeta * (q0 * s1 - q1 * s0 + q2 * s3 - q3 * s2);
@@ -242,13 +267,13 @@ void madgwick_update_imu(madgwick_t *m,
     m->gbz += 2.0f * dt_s * m->zeta * (q0 * s3 + q1 * s2 - q2 * s1 - q3 * s0);
   }
 
-  // ---- 8. qDot with effective (possibly ramping) beta ----
+  // ---- 9. qDot with effective (possibly ramping) beta ----
   float qDot0 = 0.5f * (-q1 * wx - q2 * wy - q3 * wz) - beta_eff * s0;
   float qDot1 = 0.5f * (q0 * wx + q2 * wz - q3 * wy) - beta_eff * s1;
   float qDot2 = 0.5f * (q0 * wy - q1 * wz + q3 * wx) - beta_eff * s2;
   float qDot3 = 0.5f * (q0 * wz + q1 * wy - q2 * wx) - beta_eff * s3;
 
-  // ---- 9. integrate + normalize ----
+  // ---- 10. integrate + normalize ----
   q0 += qDot0 * dt_s;
   q1 += qDot1 * dt_s;
   q2 += qDot2 * dt_s;

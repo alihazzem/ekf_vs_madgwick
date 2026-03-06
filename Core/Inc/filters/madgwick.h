@@ -27,6 +27,10 @@ extern "C"
     float elapsed_s;    // time since last init or reset
     float beta_start;   // starting beta (set equal to beta to disable adaptive)
     float beta_decay_s; // ramp duration in seconds (0 to disable)
+
+    // motion-adaptive beta: scales beta down when |a| deviates from 1g
+    float beta_motion_k; // beta_eff /= (1 + k * dev^2), dev = |a_mag - 1|
+    float beta_min;      // floor: beta_eff never drops below this value
   } madgwick_t;
 
   void madgwick_init(madgwick_t *m, float beta);
@@ -42,6 +46,11 @@ extern "C"
 
   // Adaptive beta: ramps from beta_start to m->beta over beta_decay_s seconds
   void madgwick_set_adaptive_beta(madgwick_t *m, float beta_start, float beta_decay_s);
+
+  // Motion-adaptive beta + floor: beta_eff is scaled down as |a| deviates from 1g,
+  // and is clamped to beta_min to prevent the filter going fully gyro-only.
+  // motion_k = 0 disables the scaling; beta_min = 0 disables the floor.
+  void madgwick_set_motion_gain(madgwick_t *m, float motion_k, float beta_min);
 
   // Initialise quaternion from a single accel reading (sets roll/pitch, yaw=0).
   // Call this before the first madgwick_update_imu to skip the cold-start convergence.
