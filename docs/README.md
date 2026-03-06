@@ -158,6 +158,5 @@ ekf_madgwick_comparsion/
 Detailed documentation for each module is available in:
 
 - [Module Reference](modules.md) — per-file API descriptions
-- [CLI Command Reference](cli_reference.md) — all supported serial commands
-- [Madgwick Filter](madgwick_filter.md) — algorithm details and tuning guide
+- [CLI Command Reference](cli_reference.md) — all supported serial commandss
 - [Data Flow & Timing](dataflow.md) — signal chain from sensor to output
