@@ -96,7 +96,6 @@ ekf_madgwick_comparsion/
 │   │   ├── stm32f4xx_it.h
 │   │   ├── app/                    # Application-layer headers
 │   │   │   ├── app_config.h        # Compile-time settings (sample rate, filter enables, beta, etc.)
-│   │   │   ├── app_imu_task.h      # (stub — not used yet)
 │   │   │   ├── cli_app.h           # CLI command handler interface
 │   │   │   ├── imu_app.h           # IMU application API (init, poll, stats, Madgwick control, cal)
 │   │   │   └── imu_types.h         # Shared data types: ImuRaw_t, ImuData_t, Attitude_t, FusionOut_t
@@ -104,7 +103,6 @@ ekf_madgwick_comparsion/
 │   │   │   ├── i2c_reg.h           # I2C register read/write/scan utilities
 │   │   │   ├── mpu6050.h           # MPU6050 driver (whoami, init, read_raw, read_cfg)
 │   │   │   ├── uart_cli.h          # UART CLI TX/RX + polling interface
-│   │   │   └── uart_logger.h       # (stub — reserved for future structured logging)
 │   │   ├── filters/                # Filter algorithm headers
 │   │   │   ├── ekf.h               # 7-state EKF (quaternion + gyro bias) types + API
 │   │   │   └── madgwick.h          # Madgwick filter types + API
@@ -115,14 +113,12 @@ ekf_madgwick_comparsion/
 │   ├── Src/                        # All source files (mirrors Inc/ structure)
 │   │   ├── main.c                  # Entry point, peripheral init, super-loop, ISR callbacks
 │   │   ├── app/
-│   │   │   ├── app_imu_task.c      # (stub)
 │   │   │   ├── cli_app.c           # CLI command parser and dispatcher (~450 lines)
 │   │   │   └── imu_app.c           # Core IMU pipeline (read→convert→remap→filter→stats, ~410 lines)
 │   │   ├── drivers/
 │   │   │   ├── i2c_reg.c           # I2C HAL wrappers (scan, read_reg, write_reg)
 │   │   │   ├── mpu6050.c           # MPU6050 initialization (100 Hz, ±2g, ±250 dps) + burst read
 │   │   │   ├── uart_cli.c          # UART TX (blocking), RX (interrupt→ringbuf→line assembly)
-│   │   │   └── uart_logger.c       # (stub)
 │   │   ├── filters/
 │   │   │   ├── ekf.c               # 7-state EKF implementation (~500 lines)
 │   │   │   └── madgwick.c          # Madgwick gradient-descent IMU filter (~150 lines)
