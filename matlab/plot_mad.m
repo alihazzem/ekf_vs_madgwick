@@ -18,7 +18,7 @@ clear; clc; close all;
 
 % ── Select CSV file ─────────────────────────────────────────────────────────
 
-CSV_FILE = "raw_vs_madgwick.csv";   % leave empty to open a file picker
+CSV_FILE = "ekf_capture_20260310_142321.csv";   % leave empty to open a file picker
 
 if CSV_FILE == ""
     [fname, fpath] = uigetfile("*.csv", "Select IMU capture CSV");
@@ -114,10 +114,4 @@ legend("Location", "best");
 grid on;
 
 linkaxes([ax1 ax2 ax3], "x");   % sync x-axis zoom across all subplots
-sgtitle(sprintf("IMU Capture  |  %d samples  |  %.1f Hz avg", n_samples, avg_rate));
-
-% ── Save as PNG ───────────────────────────────────────────────────────────────
-[~, csv_name, ~] = fileparts(CSV_FILE);
-png_file = csv_name + ".png";
-exportgraphics(fig, png_file, "Resolution", 150);
-fprintf("Saved : %s\n", png_file);
+sgtitle(sprintf("IMU Capture  |  %d samples  |  %.1f Hz avg", n_samples, avg_rate))

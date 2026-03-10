@@ -19,7 +19,7 @@ clear; clc; close all;
 
 % ── Select CSV file ───────────────────────────────────────────────────────────
 
-CSV_FILE = "mad_vs_ekf.csv";   % leave empty "" to open a file picker
+CSV_FILE = "ekf_capture_20260310_142321.csv";   % leave empty "" to open a file picker
 
 if CSV_FILE == ""
     [fname, fpath] = uigetfile("*.csv", "Select comparison CSV");
@@ -117,11 +117,6 @@ linkaxes([sp1 sp2 sp3 sp4], "x");
 sgtitle(sprintf("Madgwick vs EKF Comparison  |  %d samples  |  %.1f Hz", ...
                 n_samp, avg_rate));
 
-[~, csv_name, ~] = fileparts(CSV_FILE);
-png1 = csv_name + "_angles.png";
-exportgraphics(fig1, png1, "Resolution", 150);
-fprintf("Saved : %s\n", png1);
-
 % ── Figure 2: Gyro bias estimate ──────────────────────────────────────────────
 %   Shows EKF Kalman-optimal bias convergence
 %   Madgwick's zeta-based bias is internal and not in the stream,
@@ -138,10 +133,6 @@ xlabel("Time (s)");
 ylabel("Bias (mrad/s)");
 title("EKF Gyro Bias Estimate  —  Kalman-optimal tracking");
 legend("Location", "best"); grid on;
-
-png2 = csv_name + "_bias.png";
-exportgraphics(fig2, png2, "Resolution", 150);
-fprintf("Saved : %s\n", png2);
 
 % ── Figure 3: Angle difference (Madgwick - EKF) ───────────────────────────────
 %   Shows divergence between the two filters (where they disagree)
@@ -166,7 +157,3 @@ grid on;
 
 linkaxes([sp_r sp_p], "x");
 sgtitle("Where the filters diverge shows the EKF adaptive-R effect during motion");
-
-png3 = csv_name + "_diff.png";
-exportgraphics(fig3, png3, "Resolution", 150);
-fprintf("Saved : %s\n", png3);

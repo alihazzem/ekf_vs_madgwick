@@ -22,7 +22,7 @@ clear; clc; close all;
 
 % ── Select CSV file ──────────────────────────────────────────────────────────
 
-CSV_FILE = "raw_vs_ekf.csv";   % leave empty "" to open a file picker
+CSV_FILE = "ekf_capture_20260310_142321.csv";   % leave empty "" to open a file picker
 
 if CSV_FILE == ""
     [fname, fpath] = uigetfile("*.csv", "Select EKF capture CSV");
@@ -127,9 +127,3 @@ legend("Location", "best"); grid on;
 linkaxes([sp1 sp2 sp3 sp4], "x");
 sgtitle(sprintf("Raw vs EKF  |  %d samples  |  %.1f Hz  |  EKF avg %.1f µs/step", ...
                 n_samp, avg_rate, mean(ekf_us)));
-
-% ── Save PNG ──────────────────────────────────────────────────────────────────
-[~, csv_name, ~] = fileparts(CSV_FILE);
-png_file = csv_name + ".png";
-exportgraphics(fig, png_file, "Resolution", 150);
-fprintf("Saved : %s\n", png_file);
