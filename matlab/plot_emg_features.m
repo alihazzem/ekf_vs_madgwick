@@ -1,82 +1,81 @@
 % plot_emg_features.m  —  Plot windowed EMG features from process_emg.py output
-%
-% Usage
-% -----
-%   1. Run  process_emg.py  on a raw EMG capture CSV.
-%   2. Place the generated  *_features.csv  in the  emg_data/  folder,
-%      or update CSV_FILE below to any absolute or relative path.
-%   3. Run this script in MATLAB.
-%
-% This script produces two figures:
-%   Figure 1  —  4-panel feature time series (MAV, RMS, ZC, WL)
-%                All 8 channels overlaid per panel — shows when each gesture
-%                activates which channels over time.
-%   Figure 2  —  Per-channel activity bar chart (mean MAV per channel)
-%                Shows the spatial distribution of muscle activation —
-%                useful for identifying the most informative channels.
-%
-% Features CSV columns (from process_emg.py)
-% ------------------------------------------
-%   t_ms          window centre timestamp (ms)
-%   mav0–mav7     Mean Absolute Value   per channel per window
-%   rms0–rms7     Root Mean Square      per channel per window
-%   zc0–zc7       Zero Crossing count   per channel per window
-%   wl0–wl7       Waveform Length       per channel per window
 
 clear; clc; close all;
 
 % ── Select CSV file ───────────────────────────────────────────────────────────
+CSV_FILE = "../emg_data/emg_capture_test_features.csv";   % leave "" to open picker
 
-CSV_FILE = "../emg_data/emg_test_synthetic_features.csv";   % leave "" to open a file picker
-
-if CSV_FILE == ""
+if isempty(CSV_FILE)
     [fname, fpath] = uigetfile("*.csv", "Select EMG features CSV");
-    if isequal(fname, 0), disp("No file selected."); return; end
+    if isequal(fname, 0)
+        disp("No file selected.");
+        return;
+    end
     CSV_FILE = fullfile(fpath, fname);
 end
 
 % ── Load data ─────────────────────────────────────────────────────────────────
-
 T = readtable(CSV_FILE);
+
+% Basic validation
+requiredVars = ["t_ms", ...
+    compose("mav%d", 0:7), ...
+    compose("rms%d", 0:7), ...
+    compose("zc%d", 0:7), ...
+    compose("wl%d", 0:7)];
+
+missingVars = setdiff(requiredVars, string(T.Properties.VariableNames));
+if ~isempty(missingVars)
+    error("Missing required columns in CSV: %s", strjoin(missingVars, ", "));
+end
 
 t_ms = T.t_ms;
 t_s  = t_ms / 1000.0;
 
-% Extract feature blocks [N_windows x 8]
-mav = table2array(T(:, 2:9));
-rms = table2array(T(:, 10:17));
-zc  = table2array(T(:, 18:25));
-wl  = table2array(T(:, 26:33));
+% Extract by column names (more robust than fixed indices)
+mav = table2array(T(:, compose("mav%d", 0:7)));
+rms = table2array(T(:, compose("rms%d", 0:7)));
+zc  = table2array(T(:, compose("zc%d", 0:7)));
+wl  = table2array(T(:, compose("wl%d", 0:7)));
 
 % ── Stats ─────────────────────────────────────────────────────────────────────
+n_win = height(T);
+dur_s = t_s(end) - t_s(1);
 
-n_win  = height(T);
-dur_s  = t_s(end);
-dt_s   = mean(diff(t_s));
+if numel(t_s) >= 2
+    dt_s = mean(diff(t_s));
+else
+    dt_s = NaN;
+end
 
-[~, peak_ch]  = max(mean(mav, 1));   % channel with highest mean MAV
-[~, peak_win] = max(max(mav, [], 2)); % window with highest peak MAV
+[~, peak_ch] = max(mean(mav, 1));      % channel with highest mean MAV
+[~, peak_win] = max(sum(mav, 2));      % window with highest total MAV across channels
 
 fprintf("── EMG features stats ────────────────────────────\n");
-fprintf("Windows  : %d\n",     n_win);
+fprintf("Windows  : %d\n", n_win);
 fprintf("Duration : %.2f s\n", dur_s);
-fprintf("Step     : %.0f ms\n", dt_s * 1000);
-fprintf("\n── Per-channel mean MAV (overall activity) ───────\n");
+
+if ~isnan(dt_s)
+    fprintf("Step     : %.0f ms\n", dt_s * 1000);
+else
+    fprintf("Step     : N/A (only one window)\n");
+end
+
+fprintf("\n── Per-channel mean features ─────────────────────\n");
 for ch = 0:7
     fprintf("  Ch %d : MAV=%.2f  RMS=%.2f  ZC=%.1f  WL=%.1f\n", ...
-        ch, mean(mav(:,ch+1)), mean(rms(:,ch+1)), ...
-        mean(zc(:,ch+1)), mean(wl(:,ch+1)));
+        ch, mean(mav(:, ch+1)), mean(rms(:, ch+1)), ...
+        mean(zc(:, ch+1)), mean(wl(:, ch+1)));
 end
+
 fprintf("\nMost active channel : Ch %d (highest mean MAV)\n", peak_ch - 1);
 fprintf("Peak activity at    : t = %.2f s\n\n", t_s(peak_win));
 
 % ── Colour palette (8 channels) ───────────────────────────────────────────────
-
 COLORS = {"#d62728", "#2ca02c", "#1f77b4", "#ff7f0e", ...
           "#9467bd", "#8c564b", "#e377c2", "#17becf"};
 
 % ── Figure 1: Feature time series ─────────────────────────────────────────────
-
 fig1 = figure("Name", "EMG Features — Time Series", "NumberTitle", "off");
 fig1.Position = [60 60 1200 850];
 
@@ -88,7 +87,7 @@ for ch = 0:7
          "DisplayName", sprintf("Ch %d", ch));
 end
 hold off;
-ylabel("MAV (counts)");
+ylabel("MAV (raw units)");
 title("Mean Absolute Value — muscle contraction amplitude");
 legend("Location", "northeast", "NumColumns", 4);
 grid on;
@@ -101,7 +100,7 @@ for ch = 0:7
          "HandleVisibility", "off");
 end
 hold off;
-ylabel("RMS (counts)");
+ylabel("RMS (raw units)");
 title("Root Mean Square — signal power per window");
 grid on;
 
@@ -114,7 +113,7 @@ for ch = 0:7
 end
 hold off;
 ylabel("ZC (count)");
-title("Zero Crossings — frequency content indicator");
+title("Zero Crossings — rough frequency/activity indicator");
 grid on;
 
 % Panel 4 — WL
@@ -125,25 +124,26 @@ for ch = 0:7
          "HandleVisibility", "off");
 end
 hold off;
-ylabel("WL (counts)");
+ylabel("WL (raw units)");
 xlabel("Time (s)");
 title("Waveform Length — signal complexity per window");
 grid on;
 
 linkaxes([sp1 sp2 sp3 sp4], "x");
-sgtitle(sprintf("EMG Features  |  %d windows  |  step = %.0f ms  |  %.1f s total", ...
-                n_win, dt_s * 1000, dur_s));
+
+if ~isnan(dt_s)
+    sgtitle(sprintf("EMG Features  |  %d windows  |  step = %.0f ms  |  %.1f s total", ...
+        n_win, dt_s * 1000, dur_s));
+else
+    sgtitle(sprintf("EMG Features  |  %d window  |  %.1f s total", ...
+        n_win, dur_s));
+end
 
 % ── Figure 2: Per-channel activity bar chart ──────────────────────────────────
-%
-%   Shows the mean MAV for each channel across the full recording.
-%   Taller bars = more active muscle region = more informative channel
-%   for gesture classification.
-
 fig2 = figure("Name", "EMG Channel Activity Profile", "NumberTitle", "off");
 fig2.Position = [80 80 900 420];
 
-mean_mav = mean(mav, 1);   % [1 x 8]
+mean_mav = mean(mav, 1);
 
 bar_h = bar(0:7, mean_mav, "FaceColor", "flat");
 for ch = 0:7
@@ -151,9 +151,9 @@ for ch = 0:7
 end
 
 xlabel("EMG Channel");
-ylabel("Mean MAV (counts)");
-title("Per-Channel Activity Profile  —  mean MAV across full recording");
+ylabel("Mean MAV (raw units)");
+title("Per-Channel Activity Profile — mean MAV across full recording");
 xticks(0:7);
 xticklabels(arrayfun(@(x) sprintf("Ch %d", x), 0:7, "UniformOutput", false));
 grid on;
-sgtitle("Channel Activity Profile  |  higher = more muscle activation detected");
+sgtitle("Channel Activity Profile | higher = more muscle activation detected");
