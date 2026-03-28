@@ -7,7 +7,7 @@ Usage
   python capture_ekf.py COM3                         # override port
   python capture_ekf.py COM3 115200                  # override port + baud
   python capture_ekf.py COM3 115200 2                # override print divisor (default 1 = 100 Hz)
-  python capture_ekf.py COM3 115200 1 raw_vs_ekf     # custom CSV name
+  python capture_ekf.py COM7 115200 1 raw_vs_ekf     # custom CSV name
 
 How it works
 ------------

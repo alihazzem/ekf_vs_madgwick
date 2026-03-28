@@ -22,7 +22,7 @@ clear; clc; close all;
 
 % ── Select CSV file ──────────────────────────────────────────────────────────
 
-CSV_FILE = "ekf_capture_20260310_142321.csv";   % leave empty "" to open a file picker
+CSV_FILE = "../scripts/raw_vs_ekf.csv";   % leave empty "" to open a file picker
 
 if CSV_FILE == ""
     [fname, fpath] = uigetfile("*.csv", "Select EKF capture CSV");
@@ -43,14 +43,14 @@ ANGLE_SCALE = 1.0 / 1000.0;    % mdeg → deg
 TRACEP_SCALE = 1.0 / 1e6;      % undo ×1e6
 BIAS_SCALE  = 1.0 / 1e6;       % µrad/s → rad/s
 
-% Sensor → body remapping (same as imu_app.c)
-ax = -T.ay_raw * ACCEL_SCALE;
-ay = -T.az_raw * ACCEL_SCALE;
-az =  T.ax_raw * ACCEL_SCALE;
+% Sensor -> body mapping (default MPU behavior, no remap)
+ax = T.ax_raw * ACCEL_SCALE;
+ay = T.ay_raw * ACCEL_SCALE;
+az = T.az_raw * ACCEL_SCALE;
 
-gx = -T.gy_raw * GYRO_SCALE;
-gy = -T.gz_raw * GYRO_SCALE;
-gz =  T.gx_raw * GYRO_SCALE;
+gx = T.gx_raw * GYRO_SCALE;
+gy = T.gy_raw * GYRO_SCALE;
+gz = T.gz_raw * GYRO_SCALE;
 
 ekf_roll  = T.ekf_roll_mdeg  * ANGLE_SCALE;
 ekf_pitch = T.ekf_pitch_mdeg * ANGLE_SCALE;
