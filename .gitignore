@@ -47,3 +47,7 @@ Thumbs.db
 
 # STM32CubeProgrammer files
 *.stldr
+
+emg_data/*
+memory/*
+correlation_results/*

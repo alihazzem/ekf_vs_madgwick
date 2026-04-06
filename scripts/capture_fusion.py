@@ -42,11 +42,13 @@ import sys
 import csv
 import os
 import time
+import math
 import threading
 import serial
 import myo
 from myo import Hub, DeviceListener
 from datetime import datetime
+from collections import deque
 
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -55,6 +57,17 @@ BAUD      = 115200
 PRINT_DIV = 1          # 1 = 100 Hz, 2 = 50 Hz
 SDK_PATH  = ""         # set to Myo SDK bin/ path if myo.init() fails
 OUT_DIR   = "../emg_data"
+
+# Online EMG processing (kept causal / low-latency)
+ONLINE_EMG_PROC = True
+EMG_FS_HZ = 200.0
+HP_HZ = 20.0
+NOTCH_HZ = 0.0        # set 50.0 or 60.0 to enable
+NOTCH_Q = 30.0
+ENV_MS = 150.0
+FEAT_WIN_MS = 100.0
+FEAT_STEP_MS = 50.0
+ZC_THRESH = 5.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 EMG_HEADER = [
@@ -67,14 +80,27 @@ IMU_HEADER = [
     "pc_t_ms", "t_ms",
     "ax_raw", "ay_raw", "az_raw",
     "gx_raw", "gy_raw", "gz_raw",
-    "mad_roll_mdeg", "mad_pitch_mdeg", "mad_yaw_mdeg", "mad_us",
     "ekf_roll_mdeg", "ekf_pitch_mdeg", "ekf_yaw_mdeg",
     "traceP_1e6", "ekf_us",
     "bx_uradps", "by_uradps", "bz_uradps",
 ]
 
-IMU_DATA_FIELDS = len(IMU_HEADER) - 1  # 19 fields after pc_t_ms
+# Incoming firmware stream still contains 19 numeric fields after 'D,'.
+IMU_STREAM_FIELDS = 19
 DATA_PREFIX     = b"D,"
+
+EMG_PROC_HEADER = ["pc_t_ms", "emg_t_ms"]
+EMG_PROC_HEADER += [f"emg_raw{i}" for i in range(8)]
+EMG_PROC_HEADER += [f"emg_hp{i}" for i in range(8)]
+EMG_PROC_HEADER += [f"emg_rect{i}" for i in range(8)]
+EMG_PROC_HEADER += [f"emg_env{i}" for i in range(8)]
+
+EMG_FEAT_HEADER = ["pc_t_ms", "emg_t_ms"]
+EMG_FEAT_HEADER += [f"mav{i}" for i in range(8)]
+EMG_FEAT_HEADER += [f"rms{i}" for i in range(8)]
+EMG_FEAT_HEADER += [f"zc{i}" for i in range(8)]
+EMG_FEAT_HEADER += [f"wl{i}" for i in range(8)]
+EMG_FEAT_HEADER += [f"env_mean{i}" for i in range(8)]
 
 
 def send_cmd(ser: serial.Serial, cmd: str):
@@ -82,14 +108,187 @@ def send_cmd(ser: serial.Serial, cmd: str):
     time.sleep(0.15)
 
 
+def pc_time_ms(origin_ns: int) -> float:
+    """Monotonic high-resolution timestamp in ms relative to shared origin."""
+    if origin_ns <= 0:
+        return 0.0
+    return (time.perf_counter_ns() - origin_ns) / 1e6
+
+
+def imu_fields_to_ekf_only(fields_19: list) -> list:
+    """
+    Convert full 19-field stream row to EKF-only row by dropping Madgwick fields.
+
+    Full order (19):
+        t_ms, ax, ay, az, gx, gy, gz,
+        mad_roll, mad_pitch, mad_yaw, mad_us,
+        ekf_roll, ekf_pitch, ekf_yaw, traceP, ekf_us, bx, by, bz
+
+    EKF-only order (15):
+        t_ms, ax, ay, az, gx, gy, gz,
+        ekf_roll, ekf_pitch, ekf_yaw, traceP, ekf_us, bx, by, bz
+    """
+    return (
+        fields_19[0:7]
+        + fields_19[11:16]
+        + fields_19[16:19]
+    )
+
+
+def zc_deadzone(sig: list, thresh: float) -> int:
+    count = 0
+    for i in range(len(sig) - 1):
+        a = sig[i]
+        b = sig[i + 1]
+        if (a * b < 0.0) and (abs(a) >= thresh) and (abs(b) >= thresh):
+            count += 1
+    return count
+
+
+class OnlineEmgProcessor:
+    """Sample-by-sample causal EMG processing + hop-based window features."""
+
+    def __init__(self, fs_hz: float, hp_hz: float, notch_hz: float,
+                 notch_q: float, env_ms: float, feat_win_ms: float,
+                 feat_step_ms: float, zc_thresh: float):
+        self.fs_hz = fs_hz
+        self.zc_thresh = zc_thresh
+
+        # High-pass state
+        dt = 1.0 / fs_hz
+        rc = 1.0 / (2.0 * math.pi * hp_hz) if hp_hz > 0 else 0.0
+        self.hp_alpha = (rc / (rc + dt)) if hp_hz > 0 else 0.0
+        self.hp_prev_x = [0.0] * 8
+        self.hp_prev_y = [0.0] * 8
+
+        # Optional notch biquad state
+        self.notch_en = notch_hz > 0 and notch_hz < 0.5 * fs_hz
+        self.nb = [1.0, 0.0, 0.0]
+        self.na = [1.0, 0.0, 0.0]
+        self.nb_x1 = [0.0] * 8
+        self.nb_x2 = [0.0] * 8
+        self.nb_y1 = [0.0] * 8
+        self.nb_y2 = [0.0] * 8
+        if self.notch_en:
+            w0 = 2.0 * math.pi * notch_hz / fs_hz
+            alpha = math.sin(w0) / (2.0 * notch_q)
+            b0 = 1.0
+            b1 = -2.0 * math.cos(w0)
+            b2 = 1.0
+            a0 = 1.0 + alpha
+            a1 = -2.0 * math.cos(w0)
+            a2 = 1.0 - alpha
+            self.nb = [b0 / a0, b1 / a0, b2 / a0]
+            self.na = [1.0, a1 / a0, a2 / a0]
+
+        # Envelope trailing RMS state
+        self.env_win = max(1, int(round(env_ms * fs_hz / 1000.0)))
+        self.env_buf = [deque(maxlen=self.env_win) for _ in range(8)]
+        self.env_sumsq = [0.0] * 8
+
+        # Feature window/hop buffers
+        self.feat_win = max(1, int(round(feat_win_ms * fs_hz / 1000.0)))
+        self.feat_step = max(1, int(round(feat_step_ms * fs_hz / 1000.0)))
+        self.feat_buf = [deque(maxlen=self.feat_win) for _ in range(8)]
+        self.env_feat_buf = [deque(maxlen=self.feat_win) for _ in range(8)]
+        self.feat_pc_t_buf = deque(maxlen=self.feat_win)
+        self.feat_emg_t_buf = deque(maxlen=self.feat_win)
+        self.hop_counter = 0
+
+    def _hp_step(self, x: float, ch: int) -> float:
+        if self.hp_alpha <= 0.0:
+            return x
+        y = self.hp_alpha * (self.hp_prev_y[ch] + x - self.hp_prev_x[ch])
+        self.hp_prev_x[ch] = x
+        self.hp_prev_y[ch] = y
+        return y
+
+    def _notch_step(self, x: float, ch: int) -> float:
+        if not self.notch_en:
+            return x
+        b0, b1, b2 = self.nb
+        _, a1, a2 = self.na
+        y = (b0 * x + b1 * self.nb_x1[ch] + b2 * self.nb_x2[ch]
+             - a1 * self.nb_y1[ch] - a2 * self.nb_y2[ch])
+        self.nb_x2[ch] = self.nb_x1[ch]
+        self.nb_x1[ch] = x
+        self.nb_y2[ch] = self.nb_y1[ch]
+        self.nb_y1[ch] = y
+        return y
+
+    def _env_step(self, x: float, ch: int) -> float:
+        buf = self.env_buf[ch]
+        if len(buf) == self.env_win:
+            old = buf[0]
+            self.env_sumsq[ch] -= old * old
+        buf.append(x)
+        self.env_sumsq[ch] += x * x
+        n = len(buf)
+        if n <= 0:
+            return 0.0
+        return math.sqrt(max(0.0, self.env_sumsq[ch] / float(n)))
+
+    def update(self, emg_raw, pc_t_ms, emg_t_ms):
+        hp = [0.0] * 8
+        rect = [0.0] * 8
+        env = [0.0] * 8
+
+        for ch in range(8):
+            x = float(emg_raw[ch])
+            y = self._hp_step(x, ch)
+            y = self._notch_step(y, ch)
+            hp[ch] = y
+            rect[ch] = abs(y)
+            env[ch] = self._env_step(y, ch)
+
+            self.feat_buf[ch].append(y)
+            self.env_feat_buf[ch].append(env[ch])
+
+        self.feat_pc_t_buf.append(float(pc_t_ms))
+        self.feat_emg_t_buf.append(float(emg_t_ms))
+
+        self.hop_counter += 1
+        feat_row = None
+        feat_pc_t = None
+        feat_emg_t = None
+        if self.hop_counter >= self.feat_step and len(self.feat_buf[0]) == self.feat_win:
+            self.hop_counter = 0
+
+            mav = []
+            rms = []
+            zc = []
+            wl = []
+            env_mean = []
+
+            for ch in range(8):
+                w = list(self.feat_buf[ch])
+                e = list(self.env_feat_buf[ch])
+
+                abs_w = [abs(v) for v in w]
+                mav.append(sum(abs_w) / float(len(abs_w)))
+                rms.append(math.sqrt(sum(v * v for v in w) / float(len(w))))
+                zc.append(float(zc_deadzone(w, self.zc_thresh)))
+                wl.append(sum(abs(w[i + 1] - w[i]) for i in range(len(w) - 1)))
+                env_mean.append(sum(e) / float(len(e)))
+
+            feat_row = mav + rms + zc + wl + env_mean
+
+            # Window-center timestamps reduce feature time jitter.
+            mid = len(self.feat_pc_t_buf) // 2
+            feat_pc_t = list(self.feat_pc_t_buf)[mid]
+            feat_emg_t = list(self.feat_emg_t_buf)[mid]
+
+        return hp, rect, env, feat_row, feat_pc_t, feat_emg_t
+
+
 # ── IMU reader thread ─────────────────────────────────────────────────────────
 
 def imu_reader_thread(ser: serial.Serial, writer: csv.writer,
                       counters: list, running: threading.Event,
-                      t_origin: list):
+                      t_origin_ns: list):
     """
     Reads D, lines from UART and writes them to the IMU CSV.
-    t_origin[0] is set by main() when streaming starts — provides the
+    t_origin_ns[0] is set by main() when streaming starts — provides the
     common PC clock origin shared with the EMG listener.
     """
     while running.is_set():
@@ -107,18 +306,18 @@ def imu_reader_thread(ser: serial.Serial, writer: csv.writer,
         if line.startswith(DATA_PREFIX):
             try:
                 parts = line.split(b",")
-                if len(parts) == IMU_DATA_FIELDS + 1:
+                if len(parts) == IMU_STREAM_FIELDS + 1:
                     fields = [int(p) for p in parts[1:]]
                 elif len(parts) == 11:
-                    fields = [int(p) for p in parts[1:]] + [0] * (IMU_DATA_FIELDS - 10)
+                    # Tolerate old 10-field stream (Madgwick-only era)
+                    fields = [int(p) for p in parts[1:]] + [0] * (IMU_STREAM_FIELDS - 10)
                 else:
                     continue
             except ValueError:
                 continue
 
-            origin = t_origin[0]
-            pc_t   = int((time.time() - origin) * 1000) if origin else 0
-            writer.writerow([pc_t] + fields)
+            pc_t = pc_time_ms(t_origin_ns[0])
+            writer.writerow([pc_t] + imu_fields_to_ekf_only(fields))
             counters[1] += 1
         else:
             text = line.decode(errors="replace")
@@ -131,13 +330,19 @@ def imu_reader_thread(ser: serial.Serial, writer: csv.writer,
 class FusionEmgListener(DeviceListener):
 
     def __init__(self, writer: csv.writer, counters: list,
-                 running: threading.Event, t_origin: list):
+                 running: threading.Event, t_origin_ns: list,
+                 emg_proc_writer: csv.writer = None,
+                 emg_feat_writer: csv.writer = None,
+                 online_proc: OnlineEmgProcessor = None):
         super().__init__()
-        self._writer   = writer
+        self._writer = writer
         self._counters = counters
-        self._running  = running
-        self._t_origin = t_origin
-        self._t_start  = None   # first Myo callback timestamp (µs)
+        self._running = running
+        self._t_origin_ns = t_origin_ns
+        self._t_start = None   # first Myo callback timestamp (µs)
+        self._proc_writer = emg_proc_writer
+        self._feat_writer = emg_feat_writer
+        self._online_proc = online_proc
 
     def on_connected(self, event):
         print("  [EMG] Myo connected — streaming EMG")
@@ -155,10 +360,18 @@ class FusionEmgListener(DeviceListener):
 
         emg_t_ms = int((event.timestamp - self._t_start) / 1000)
 
-        origin = self._t_origin[0]
-        pc_t   = int((time.time() - origin) * 1000) if origin else 0
+        pc_t = pc_time_ms(self._t_origin_ns[0])
 
-        self._writer.writerow([pc_t, emg_t_ms] + list(event.emg))
+        emg_raw = list(event.emg)
+        self._writer.writerow([pc_t, emg_t_ms] + emg_raw)
+
+        if self._online_proc and self._proc_writer:
+            hp, rect, env, feat, feat_pc_t, feat_emg_t = self._online_proc.update(emg_raw, pc_t, emg_t_ms)
+            self._proc_writer.writerow([pc_t, emg_t_ms] + emg_raw + hp + rect + env)
+            if feat is not None and self._feat_writer:
+                self._feat_writer.writerow([feat_pc_t, feat_emg_t] + feat)
+                self._counters[2] += 1
+
         self._counters[0] += 1
 
 
@@ -169,7 +382,8 @@ def progress_thread(counters: list, running: threading.Event):
     while running.is_set():
         time.sleep(1.0)
         print(f"  EMG: {counters[0]:5d} samples  |  "
-              f"IMU: {counters[1]:5d} samples      ",
+              f"IMU: {counters[1]:5d} samples  |  "
+              f"FEAT: {counters[2]:5d} windows      ",
               end="\r", flush=True)
 
 
@@ -188,9 +402,14 @@ def main():
 
     emg_path = os.path.join(out_dir, f"fusion_emg_{timestamp}.csv")
     imu_path = os.path.join(out_dir, f"fusion_imu_{timestamp}.csv")
+    emg_proc_path = os.path.join(out_dir, f"fusion_emg_online_{timestamp}.csv")
+    emg_feat_path = os.path.join(out_dir, f"fusion_emg_feat_{timestamp}.csv")
 
     print(f"\nEMG out : {emg_path}")
     print(f"IMU out : {imu_path}")
+    if ONLINE_EMG_PROC:
+        print(f"EMG proc: {emg_proc_path}")
+        print(f"EMG feat: {emg_feat_path}")
     print("─" * 60)
 
     # ── Open serial ───────────────────────────────────────────────────────────
@@ -214,21 +433,45 @@ def main():
     # ── Open CSV files ────────────────────────────────────────────────────────
     emg_f  = open(emg_path, "w", newline="")
     imu_f  = open(imu_path, "w", newline="")
+    emg_proc_f = None
+    emg_feat_f = None
+
     emg_wr = csv.writer(emg_f)
     imu_wr = csv.writer(imu_f)
     emg_wr.writerow(EMG_HEADER)
     imu_wr.writerow(IMU_HEADER)
 
-    # counters[0] = EMG samples, counters[1] = IMU samples
-    counters = [0, 0]
+    emg_proc_wr = None
+    emg_feat_wr = None
+    online_proc = None
+    if ONLINE_EMG_PROC:
+        emg_proc_f = open(emg_proc_path, "w", newline="")
+        emg_feat_f = open(emg_feat_path, "w", newline="")
+        emg_proc_wr = csv.writer(emg_proc_f)
+        emg_feat_wr = csv.writer(emg_feat_f)
+        emg_proc_wr.writerow(EMG_PROC_HEADER)
+        emg_feat_wr.writerow(EMG_FEAT_HEADER)
+        online_proc = OnlineEmgProcessor(
+            fs_hz=EMG_FS_HZ,
+            hp_hz=HP_HZ,
+            notch_hz=NOTCH_HZ,
+            notch_q=NOTCH_Q,
+            env_ms=ENV_MS,
+            feat_win_ms=FEAT_WIN_MS,
+            feat_step_ms=FEAT_STEP_MS,
+            zc_thresh=ZC_THRESH,
+        )
+
+    # counters[0] = EMG samples, counters[1] = IMU samples, counters[2] = feature windows
+    counters = [0, 0, 0]
     running  = threading.Event()
     running.set()
-    t_origin = [0.0]   # shared PC clock origin — set when streaming starts
+    t_origin_ns = [0]   # shared monotonic origin (ns) — set when streaming starts
 
     # ── Start IMU reader thread ───────────────────────────────────────────────
     imu_t = threading.Thread(
         target=imu_reader_thread,
-        args=(ser, imu_wr, counters, running, t_origin),
+        args=(ser, imu_wr, counters, running, t_origin_ns),
         daemon=True)
     imu_t.start()
 
@@ -249,14 +492,22 @@ def main():
     # ── Start both streams ────────────────────────────────────────────────────
     print("Waiting for Myo armband connection ...")
     hub      = Hub()
-    listener = FusionEmgListener(emg_wr, counters, running, t_origin)
+    listener = FusionEmgListener(
+        emg_wr,
+        counters,
+        running,
+        t_origin_ns,
+        emg_proc_writer=emg_proc_wr,
+        emg_feat_writer=emg_feat_wr,
+        online_proc=online_proc,
+    )
 
     with hub.run_in_background(listener):
         # Give the Myo a moment to connect before starting the IMU stream
         time.sleep(1.0)
 
         # Set the shared clock origin — both streams timestamp relative to this
-        t_origin[0] = time.time()
+        t_origin_ns[0] = time.perf_counter_ns()
 
         send_cmd(ser, f"MPU PRINT {print_div}")
         send_cmd(ser, "MPU STREAM ON")
@@ -295,11 +546,18 @@ def main():
     imu_t.join(timeout=2)
     emg_f.close()
     imu_f.close()
+    if emg_proc_f is not None:
+        emg_proc_f.close()
+    if emg_feat_f is not None:
+        emg_feat_f.close()
     ser.close()
 
     print(f"Done.")
     print(f"  EMG : {counters[0]} samples  → {emg_path}")
     print(f"  IMU : {counters[1]} samples  → {imu_path}\n")
+    if ONLINE_EMG_PROC:
+        print(f"  EMG online : {counters[0]} rows  → {emg_proc_path}")
+        print(f"  EMG feat   : {counters[2]} rows  → {emg_feat_path}\n")
 
 
 if __name__ == "__main__":
