@@ -51,3 +51,4 @@ Thumbs.db
 emg_data/*
 memory/*
 correlation_results/*
+.venv/*

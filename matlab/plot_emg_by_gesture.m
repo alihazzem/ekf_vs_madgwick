@@ -1,37 +1,32 @@
-% plot_emg_by_gesture.m
-% Plot EMG per gesture using labeled trial metadata.
+% plot_one_trial_all_channels_pairs.m
+% Plot one selected gesture + one selected trial, showing all 8 EMG channels
+% as 4 figures, with 2 channels per figure.
 %
-% This script supports two modes:
-%   1) "gesture_overview" (default, lightweight): one figure per gesture
-%      using one selected channel.
-%   2) "per_channel" (heavier): one figure per gesture per channel.
-%
-% In each figure:
+% For each channel:
 %   - top subplot: raw EMG
-%   - bottom subplot: selected filtered EMG stage (HP/RECT/ENV)
-% Trials of the same gesture are overlaid in each subplot.
+%   - bottom subplot: selected filtered EMG stage (HP / RECT / ENV)
 %
-% Data source:
-%   ../emg_data/trial_labels.csv
-%   referenced fusion_emg_online_*.csv files
+% Layout:
+%   Figure 1: ch0, ch1
+%   Figure 2: ch2, ch3
+%   Figure 3: ch4, ch5
+%   Figure 4: ch6, ch7
 
 clear; clc; close all;
 
 % ── User settings ────────────────────────────────────────────────────────────
-LABELS_CSV = "../emg_data/trial_labels.csv";
-FILTER_SOURCE = "env";      % "hp", "rect", "env"
-SESSION_ID = "";            % e.g. "S01"; leave "" for all sessions
-GESTURES = [];              % [] => auto from labels (REST/FIST/OPEN/PINCH...)
-PLOT_MODE = "gesture_overview";  % "gesture_overview" or "per_channel"
-OVERVIEW_CHANNEL = 3;       % channel used in gesture_overview mode
-CHANNELS = 0:7;             % channels to plot
-MAX_TRIALS_PER_GESTURE = 3; % 0 = all (larger values increase plotting load)
-PLOT_STRIDE = 4;            % plot every Nth sample for speed (1 = full resolution)
-SHOW_LEGEND = true;        % legends are expensive with many trials
-SAVE_PNG = false;           % true to save png files
-OUT_DIR = "../emg_data/gesture_plots";
-DOCK_FIGURES = false;       % true: open figures docked inside MATLAB desktop
-FIG_SIZE = [1200 700];      % [width height] when not docked
+LABELS_CSV    = "../emg_data/trial_labels.csv";
+FILTER_SOURCE = "env";     % "hp", "rect", "env"
+GESTURE       = "FIST";    % e.g. "FIST"
+SESSION_ID    = "S01";     % e.g. "S01", or "" to ignore session
+TRIAL_ID      = "4";       % trial to plot as string or number
+CHANNEL_PAIRS = [0 1; 2 3; 4 5; 6 7];
+
+PLOT_STRIDE   = 1;         % 1 = full resolution
+DOCK_FIGURES  = false;
+FIG_SIZE      = [1300 850];
+SAVE_PNG      = false;
+OUT_DIR       = "../emg_data/trial_channel_pair_plots";
 % ─────────────────────────────────────────────────────────────────────────────
 
 if DOCK_FIGURES
@@ -44,7 +39,7 @@ if ~isfile(LABELS_CSV)
     error("Labels file not found: %s", LABELS_CSV);
 end
 
-L = readtable(LABELS_CSV);
+L = readtable(LABELS_CSV, "TextType", "string");
 if isempty(L)
     error("Labels file is empty: %s", LABELS_CSV);
 end
@@ -56,18 +51,25 @@ for i = 1:numel(required)
     end
 end
 
+gesture_upper = upper(strtrim(string(GESTURE)));
+trial_str = string(TRIAL_ID);
+
+rows = upper(string(L.gesture_label)) == gesture_upper & string(L.trial_id) == trial_str;
+
 if SESSION_ID ~= ""
-    L = L(string(L.session_id) == SESSION_ID, :);
+    rows = rows & string(L.session_id) == string(SESSION_ID);
 end
 
-if isempty(L)
-    error("No label rows found after session filter.");
+G = L(rows, :);
+
+if isempty(G)
+    error("No matching row found for gesture=%s, session=%s, trial=%s", ...
+        gesture_upper, string(SESSION_ID), trial_str);
 end
 
-if isempty(GESTURES)
-    gest = unique(string(L.gesture_label));
-else
-    gest = string(GESTURES);
+if height(G) > 1
+    warning("Multiple matching rows found. Using the first one.");
+    G = G(1, :);
 end
 
 switch upper(string(FILTER_SOURCE))
@@ -92,98 +94,110 @@ if PLOT_STRIDE < 1
     PLOT_STRIDE = 1;
 end
 
-for g = 1:numel(gest)
-    g_name = upper(strtrim(gest(g)));
-    G = L(upper(string(L.gesture_label)) == g_name, :);
+fpath = fullfile("..", "emg_data", string(G.emg_online_file(1)));
+if ~isfile(fpath)
+    error("EMG file not found: %s", fpath);
+end
 
-    if isempty(G)
-        fprintf("Skipping %s (no trials found).\n", g_name);
-        continue;
+T = readtable(fpath);
+vars = string(T.Properties.VariableNames);
+
+if ~any(vars == "pc_t_ms")
+    error("Column pc_t_ms not found in file: %s", fpath);
+end
+
+t_s = (double(T.pc_t_ms) - double(T.pc_t_ms(1))) / 1000.0;
+idx = 1:PLOT_STRIDE:numel(t_s);
+
+fprintf("\nLoaded file: %s\n", fpath);
+fprintf("Gesture: %s | Session: %s | Trial: %s\n", gesture_upper, string(G.session_id(1)), trial_str);
+
+for p = 1:size(CHANNEL_PAIRS, 1)
+    chA = CHANNEL_PAIRS(p, 1);
+    chB = CHANNEL_PAIRS(p, 2);
+
+    fig = figure("Name", sprintf("%s | Trial %s | Ch%d-Ch%d", gesture_upper, trial_str, chA, chB), ...
+                 "NumberTitle", "off");
+
+    if ~DOCK_FIGURES
+        screen = get(groot, "ScreenSize");
+        w = min(FIG_SIZE(1), max(500, screen(3) - 80));
+        h = min(FIG_SIZE(2), max(400, screen(4) - 120));
+        fig.Position = [120 80 w h];
+        movegui(fig, "onscreen");
     end
 
-    if MAX_TRIALS_PER_GESTURE > 0 && height(G) > MAX_TRIALS_PER_GESTURE
-        G = G(1:MAX_TRIALS_PER_GESTURE, :);
-    end
+    tl = tiledlayout(2, 2, "TileSpacing", "compact", "Padding", "compact");
 
-    fprintf("\nGesture: %s  |  Trials: %d\n", g_name, height(G));
+    % -------- Channel A raw --------
+    ax1 = nexttile(tl, 1);
+    hold(ax1, "on"); grid(ax1, "on");
+    raw_col_A = sprintf("emg_raw%d", chA);
+    fil_col_A = sprintf("%s%d", filt_prefix, chA);
 
-    if lower(string(PLOT_MODE)) == "gesture_overview"
-        ch_list = OVERVIEW_CHANNEL;
+    if ~any(vars == raw_col_A) || ~any(vars == fil_col_A)
+        title(ax1, sprintf("Missing columns for ch%d", chA));
     else
-        ch_list = CHANNELS;
+        rawA = double(T.(raw_col_A));
+        plot(ax1, t_s(idx), rawA(idx), "LineWidth", 0.9);
+        yline(ax1, 0, "k--", "LineWidth", 0.4, "HandleVisibility", "off");
+        title(ax1, sprintf("Channel %d | Raw", chA));
+        ylabel(ax1, "Raw");
     end
 
-    for ch = ch_list
-        fig = figure("Name", sprintf("%s - Ch %d", g_name, ch), "NumberTitle", "off");
+    % -------- Channel B raw --------
+    ax2 = nexttile(tl, 2);
+    hold(ax2, "on"); grid(ax2, "on");
+    raw_col_B = sprintf("emg_raw%d", chB);
+    fil_col_B = sprintf("%s%d", filt_prefix, chB);
 
-        if ~DOCK_FIGURES
-            screen = get(groot, "ScreenSize"); % [left bottom width height]
-            w = min(FIG_SIZE(1), max(400, screen(3) - 80));
-            h = min(FIG_SIZE(2), max(300, screen(4) - 120));
-            fig.Position = [120 80 w h];
-            movegui(fig, "onscreen");
-        end
-
-        tiledlayout(2, 1, "TileSpacing", "compact", "Padding", "compact");
-
-        ax1 = nexttile;
-        hold(ax1, "on");
-        grid(ax1, "on");
-        ylabel(ax1, "Raw");
-        title(ax1, sprintf("%s | Channel %d | Raw", g_name, ch));
-
-        ax2 = nexttile;
-        hold(ax2, "on");
-        grid(ax2, "on");
-        ylabel(ax2, filt_label);
-        xlabel(ax2, "Time (s)");
-        title(ax2, sprintf("%s | Channel %d | %s", g_name, ch, filt_label));
-
-        trial_colors = lines(height(G));
-        legend_entries = strings(height(G), 1);
-
-        for r = 1:height(G)
-            fpath = fullfile("..", "emg_data", string(G.emg_online_file(r)));
-            if ~isfile(fpath)
-                fprintf("  Missing file: %s\n", fpath);
-                continue;
-            end
-
-            T = readtable(fpath);
-            vars = string(T.Properties.VariableNames);
-
-            raw_col = sprintf("emg_raw%d", ch);
-            fil_col = sprintf("%s%d", filt_prefix, ch);
-            if ~any(vars == raw_col) || ~any(vars == fil_col) || ~any(vars == "pc_t_ms")
-                fprintf("  Missing cols in %s (skip)\n", fpath);
-                continue;
-            end
-
-            t_s = (double(T.pc_t_ms) - double(T.pc_t_ms(1))) / 1000.0;
-            raw = double(T.(raw_col));
-            fil = double(T.(fil_col));
-
-            idx = 1:PLOT_STRIDE:numel(t_s);
-
-            c = trial_colors(r, :);
-            plot(ax1, t_s(idx), raw(idx), "Color", c, "LineWidth", 0.8);
-            plot(ax2, t_s(idx), fil(idx), "Color", c, "LineWidth", 0.9);
-
-            legend_entries(r) = sprintf("Trial %s", string(G.trial_id(r)));
-        end
-
-        yline(ax1, 0, "k--", "LineWidth", 0.4, "HandleVisibility", "off");
+    if ~any(vars == raw_col_B) || ~any(vars == fil_col_B)
+        title(ax2, sprintf("Missing columns for ch%d", chB));
+    else
+        rawB = double(T.(raw_col_B));
+        plot(ax2, t_s(idx), rawB(idx), "LineWidth", 0.9);
         yline(ax2, 0, "k--", "LineWidth", 0.4, "HandleVisibility", "off");
+        title(ax2, sprintf("Channel %d | Raw", chB));
+        ylabel(ax2, "Raw");
+    end
 
-        if SHOW_LEGEND
-            legend(ax2, legend_entries, "Location", "northeastoutside");
-        end
-        sgtitle(sprintf("Gesture %s | Channel %d | Raw vs %s (separate)", g_name, ch, filt_label));
+    % -------- Channel A filtered --------
+    ax3 = nexttile(tl, 3);
+    hold(ax3, "on"); grid(ax3, "on");
 
-        if SAVE_PNG
-            out_name = sprintf("%s_ch%d_%s_raw_vs_%s.png", lower(g_name), ch, lower(PLOT_MODE), lower(FILTER_SOURCE));
-            exportgraphics(fig, fullfile(OUT_DIR, out_name), "Resolution", 150);
-        end
+    if ~any(vars == fil_col_A)
+        title(ax3, sprintf("Missing filtered column for ch%d", chA));
+    else
+        filA = double(T.(fil_col_A));
+        plot(ax3, t_s(idx), filA(idx), "LineWidth", 1.0);
+        yline(ax3, 0, "k--", "LineWidth", 0.4, "HandleVisibility", "off");
+        title(ax3, sprintf("Channel %d | %s", chA, filt_label));
+        xlabel(ax3, "Time (s)");
+        ylabel(ax3, filt_label);
+    end
+
+    % -------- Channel B filtered --------
+    ax4 = nexttile(tl, 4);
+    hold(ax4, "on"); grid(ax4, "on");
+
+    if ~any(vars == fil_col_B)
+        title(ax4, sprintf("Missing filtered column for ch%d", chB));
+    else
+        filB = double(T.(fil_col_B));
+        plot(ax4, t_s(idx), filB(idx), "LineWidth", 1.0);
+        yline(ax4, 0, "k--", "LineWidth", 0.4, "HandleVisibility", "off");
+        title(ax4, sprintf("Channel %d | %s", chB, filt_label));
+        xlabel(ax4, "Time (s)");
+        ylabel(ax4, filt_label);
+    end
+
+    sgtitle(sprintf("Gesture %s | Session %s | Trial %s | Channels %d & %d", ...
+        gesture_upper, string(G.session_id(1)), trial_str, chA, chB));
+
+    if SAVE_PNG
+        out_name = sprintf("%s_sess_%s_trial_%s_ch%d_ch%d_%s.png", ...
+            lower(gesture_upper), lower(string(G.session_id(1))), trial_str, chA, chB, lower(FILTER_SOURCE));
+        exportgraphics(fig, fullfile(OUT_DIR, out_name), "Resolution", 150);
     end
 end
 
