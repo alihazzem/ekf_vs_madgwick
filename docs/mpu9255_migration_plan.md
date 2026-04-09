@@ -1,8 +1,13 @@
-# MPU-6050 to MPU-9250 Migration Plan (EKF + Madgwick, 9-DoF Yaw)
+# MPU-6050 to GY-91 (MPU-9255) Migration Plan (EKF + Madgwick, 9-DoF Yaw)
 
 ## 1) Objective
 
-Migrate the current IMU fusion stack from MPU-6050 (6-axis) to MPU-9250 (9-axis: accel + gyro + magnetometer) so yaw is referenced to magnetic north and no longer drifts like gyro-only heading.
+Migrate the current IMU fusion stack from MPU-6050 (6-axis) to the GY-91 module (MPU-9255 9-axis: accel + gyro + AK8963 magnetometer) so yaw is referenced to magnetic north and no longer drifts like gyro-only heading.
+
+> **Note — GY-91 module details:**
+> The GY-91 board carries an **MPU-9255** (not MPU-9250) and a **BMP280** barometric pressure sensor.
+> The MPU-9255 is register-compatible with the MPU-9250; the only firmware-visible difference is the WHO_AM_I value (`0x73` instead of `0x71`).
+> The **BMP280 barometer is present on the board but will NOT be used** in this project — its I2C address (0x76/0x77) and chip-select pin (CSB) are simply left unconnected / ignored in software.
 
 This plan is built specifically for your current project architecture (STM32F411 bare-metal, 100 Hz loop, dual filter pipeline, UART CLI, CSV logging).
 
@@ -10,7 +15,7 @@ This plan is built specifically for your current project architecture (STM32F411
 
 ## 2) Success Criteria (Definition of Done)
 
-1. System boots and detects MPU-9250 and AK8963 consistently.
+1. System boots and detects MPU-9255 and AK8963 consistently.
 2. 9-axis data stream is stable at 100 Hz (or chosen synchronized rate) with no missed-read bursts.
 3. Madgwick runs in MARG mode (gyro + accel + mag) and provides stable absolute yaw.
 4. EKF includes magnetometer measurement update (minimum 7-state + mag update; optional 10-state with mag bias).
@@ -35,7 +40,7 @@ Current system characteristics:
 
 Target behavior after migration:
 
-- Sensor driver: MPU9250 accel/gyro + AK8963 magnetometer.
+- Sensor driver: GY-91 module — MPU-9255 accel/gyro + AK8963 magnetometer (BMP280 barometer ignored).
 - Fusion input: accel + gyro + mag.
 - Madgwick mode: MARG update path.
 - EKF: add magnetometer measurement update (and optionally mag bias states).
@@ -61,18 +66,39 @@ Why this is recommended:
 
 ## 5) Hardware and Register Plan
 
+## 5.0 Module overview — GY-91
+
+The GY-91 module exposes the following pins:
+
+| Pin | Function | Notes |
+|-----|----------|-------|
+| VIN | Power supply | 3.3 V – 5 V (onboard regulator) |
+| GND | Ground | |
+| 3V3 | Regulated 3.3 V output | Can also be used as 3.3 V input |
+| SCL | I2C clock / SPI clock | |
+| SDA | I2C data / SPI MOSI | |
+| SAO/SDO | I2C addr select / SPI MISO | Directly affects MPU I2C address (0x68 low / 0x69 high) |
+| NCS | Chip select — MPU-9255 | Pull high or leave open for I2C mode |
+| CSB | Chip select — BMP280 | **Not used** — pull high or leave open |
+
+ICs on board:
+
+- **MPU-9255** — 9-axis IMU (accel + gyro + AK8963 magnetometer die)
+- **BMP280** — barometric pressure / temperature sensor → **explicitly ignored in this project**
+
 ## 5.1 Electrical and bus assumptions
 
 1. Keep I2C bus at 400 kHz (same as existing).
-2. Confirm board wiring for MPU-9250 breakout (SCL/SDA, VCC, GND, pull-ups).
-3. Confirm logic level compatibility (3.3V).
+2. Confirm board wiring for GY-91 module (SCL/SDA, VIN or 3V3, GND). NCS and CSB should be pulled high or left floating for I2C mode.
+3. Confirm logic level compatibility (3.3 V).
+4. BMP280 will share the I2C bus at address 0x76 or 0x77 — it is safe to ignore; the firmware simply never addresses it.
 
 ## 5.2 Device IDs
 
-1. MPU-9250 WHO_AM_I expected: 0x71 (some variants may differ).
-2. AK8963 WHO_AM_I expected: 0x48.
+1. MPU-9255 WHO_AM_I expected: **0x73** (register 117 / 0x75). Note: MPU-9250 returns 0x71 — accept both if future cross-compatibility is desired.
+2. AK8963 WHO_AM_I expected: 0x48 (same magnetometer die as MPU-9250).
 
-## 5.3 MPU-9250 configuration
+## 5.3 MPU-9255 configuration
 
 Planned equivalent settings to preserve current behavior:
 
@@ -102,17 +128,19 @@ Scaling model:
 
 ## 6.1 New driver modules
 
-1. Create Core/Inc/drivers/mpu9250.h
-2. Create Core/Src/drivers/mpu9250.c
+1. Create Core/Inc/drivers/mpu9255.h
+2. Create Core/Src/drivers/mpu9255.c
 3. Create Core/Inc/drivers/ak8963.h
 4. Create Core/Src/drivers/ak8963.c
 
+> No driver is created for the BMP280 — it is intentionally unused.
+
 Suggested APIs:
 
-- mpu9250_whoami
-- mpu9250_init_100hz
-- mpu9250_read_accel_gyro_raw
-- mpu9250_enable_bypass
+- mpu9255_whoami (accept 0x73; optionally also 0x71 for MPU-9250 compat)
+- mpu9255_init_100hz
+- mpu9255_read_accel_gyro_raw
+- mpu9255_enable_bypass
 - ak8963_whoami
 - ak8963_read_asa
 - ak8963_init_continuous_100hz
@@ -124,14 +152,15 @@ Suggested APIs:
    - Add raw and calibrated magnetometer fields.
    - Add validity/status bits for mag sample.
 2. Update Core/Src/app/imu_app.c:
-   - Replace MPU6050 read path with MPU9250 + AK8963 fused read flow.
+   - Replace MPU6050 read path with MPU9255 + AK8963 fused read flow.
    - Add mag unit conversion and calibration application.
    - Add mag axis remap (separate map from accel/gyro if needed).
    - Add fallback behavior when mag sample invalid.
 3. Update Core/Inc/app/app_config.h:
-   - Sensor select macro (MPU6050 legacy or MPU9250 new).
+   - Sensor select macro (MPU6050 legacy or GY91/MPU9255 new).
    - Mag noise/gating thresholds.
    - Optional declination constant.
+   - BMP280 is NOT referenced anywhere — no barometer config needed.
 
 ## 6.3 Filter modules
 
@@ -156,7 +185,7 @@ Suggested APIs:
 
 ## 6.5 Documentation
 
-1. Update docs/README.md with MPU-9250 architecture notes.
+1. Update docs/README.md with GY-91 / MPU-9255 architecture notes.
 2. Update docs/modules.md to include new drivers.
 3. Update docs/filter_explanation.md for 9-axis fusion math.
 4. Keep this migration plan as execution checklist.
@@ -182,14 +211,15 @@ Exit criteria:
 
 - You can compare post-migration behavior quantitatively.
 
-## Phase 1: Driver bring-up (MPU-9250 + AK8963)
+## Phase 1: Driver bring-up (GY-91: MPU-9255 + AK8963)
 
 Tasks:
 
-1. Implement MPU-9250 init and accel/gyro burst read.
+1. Implement MPU-9255 init and accel/gyro burst read (registers identical to MPU-9250; accept WHO_AM_I = 0x73).
 2. Implement bypass mode and AK8963 bring-up.
 3. Implement AK8963 status-safe read.
 4. Verify both IDs over CLI diagnostic command.
+5. Confirm BMP280 is visible on the bus (optional sanity check) but do NOT initialize or read it.
 
 Deliverables:
 
@@ -340,7 +370,7 @@ Exit criteria:
 
 Tasks:
 
-1. Keep compile-time switch for legacy MPU-6050 path until MPU-9250 is fully accepted.
+1. Keep compile-time switch for legacy MPU-6050 path until GY-91 / MPU-9255 path is fully accepted.
 2. Preserve IMU-only fallback mode in filters.
 3. Document known magnetic-interference limitations.
 
@@ -405,7 +435,7 @@ Fallback policy:
 ## 11) Implementation Checklist
 
 - [ ] Baseline metrics captured on MPU-6050
-- [ ] MPU-9250 accel/gyro driver integrated
+- [ ] MPU-9255 accel/gyro driver integrated (GY-91 module)
 - [ ] AK8963 driver integrated
 - [ ] 9-axis sample path added in imu_app
 - [ ] Mag unit conversion and ASA correction validated
@@ -440,3 +470,4 @@ Optional Stage B (10-state EKF): add 2 to 4 additional days.
 2. Keep dual-mode operation (9-axis and IMU-only) for robustness.
 3. Validate yaw with objective metrics, not only visual smoothness.
 4. Preserve your current strong timing/diagnostic instrumentation during migration.
+5. The BMP280 barometer on the GY-91 module is intentionally unused — do not add any barometer code or configuration.
