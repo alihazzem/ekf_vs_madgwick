@@ -52,3 +52,5 @@ emg_data/*
 memory/*
 correlation_results/*
 .venv/*
+scripts/*
+matlab/*

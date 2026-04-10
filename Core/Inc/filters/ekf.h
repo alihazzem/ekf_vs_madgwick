@@ -43,6 +43,12 @@ extern "C"
         float sigma_gyro;  /* gyro noise density  (rad/s/sqrt(Hz))  */
         float sigma_bias;  /* bias random-walk    (rad/s^2/sqrt(Hz)) */
         float sigma_accel; /* accel noise density (g/sqrt(Hz))       */
+        float sigma_mag;   /* mag noise density   (uT/sqrt(Hz))      */
+
+        /* Magnetometer reference / gating ----------------------------------- */
+        float mag_ref_n[3]; /* earth-frame magnetic direction (unit)       */
+        bool mag_ref_valid; /* set after ekf7_init_from_marg or first mag  */
+        float mag_nis_gate; /* reject when NIS = y^T S^-1 y exceeds this   */
 
         /* Adaptive R tuning -------------------------------------------------- */
         float r_adapt_k; /* R_eff = sigma_accel^2 * (1 + r_adapt_k * dev^2)
@@ -66,6 +72,7 @@ extern "C"
      * @param sigma_gyro  Gyro noise density  (rad/s/sqrt(Hz))  e.g. 0.01
      * @param sigma_bias  Bias random-walk    (rad/s^2/sqrt(Hz)) e.g. 1e-5
      * @param sigma_accel Accel noise density (g/sqrt(Hz))       e.g. 0.05
+     * @param sigma_mag   Mag noise density   (uT/sqrt(Hz))      e.g. 0.5
      * @param r_adapt_k   Adaptive-R steepness coefficient       e.g. 20.0
      * @param P0          Initial diagonal value for P           e.g. 1.0
      */
@@ -73,6 +80,7 @@ extern "C"
                    float sigma_gyro,
                    float sigma_bias,
                    float sigma_accel,
+                   float sigma_mag,
                    float r_adapt_k,
                    float P0);
 
@@ -97,6 +105,7 @@ extern "C"
                         float sigma_gyro,
                         float sigma_bias,
                         float sigma_accel,
+                        float sigma_mag,
                         float r_adapt_k);
 
     /**
@@ -106,6 +115,13 @@ extern "C"
      *         Bias estimate is preserved.
      */
     void ekf7_init_from_accel(ekf7_t *e, float ax_g, float ay_g, float az_g);
+
+    /**
+     * @brief  Align initial roll/pitch from accel, and yaw from mag.
+     *         Prevents EKF from diverging out of bounds due to extreme initial
+     *         yaw errors during the first measurement update.
+     */
+    void ekf7_init_from_marg(ekf7_t *e, float ax_g, float ay_g, float az_g, float mx, float my, float mz);
 
     /* ----------------------------------------------------------------------- *
      * Core filter steps                                                        *
@@ -137,6 +153,26 @@ extern "C"
                    float wx, float wy, float wz,
                    float ax_g, float ay_g, float az_g,
                    float dt_s);
+
+    /**
+     * @brief  Update step: magnetometer measurement correction.
+     *         Observation h(q) = R(q)^T * m_ref where m_ref is a fixed
+     *         earth-frame magnetic direction set at initial alignment.
+     *         Uses NIS gating for magnetic outlier rejection.
+     *
+     * @param mx/my/mz  Calibrated Mag in uT (body frame)
+     */
+    void ekf7_update_mag(ekf7_t *e, float mx, float my, float mz);
+
+    /**
+     * @brief  Convenience MARG wrapper: Predict -> Update Accel -> Update Mag.
+     *         Provides full 9-axis yaw drift elimination.
+     */
+    void ekf7_step_marg(ekf7_t *e,
+                        float wx, float wy, float wz,
+                        float ax_g, float ay_g, float az_g,
+                        float mx, float my, float mz,
+                        float dt_s);
 
     /* ----------------------------------------------------------------------- *
      * Accessors / diagnostics                                                  *

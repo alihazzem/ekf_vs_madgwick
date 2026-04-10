@@ -3,10 +3,18 @@
 #include "stm32f4xx_hal.h"
 
 #include "drivers/i2c_reg.h"
-#include "drivers/mpu6050.h"
 #include "app/imu_app.h"
+#include "app/app_config.h"
+
+#if SENSOR_GY91
+#include "drivers/mpu9255.h"
+#include "drivers/ak8963.h"
+#else
+#include "drivers/mpu6050.h"
+#endif
 
 #include <string.h>
+#include <math.h> /* sqrtf for MPU MAG norm display */
 #include <ctype.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -158,6 +166,10 @@ void app_cli_handle_line(const char *line)
     uart_cli_send("  MPU PRINT <N>\r\n");
     uart_cli_send("  MPU RATE\r\n");
     uart_cli_send("  MPU STATS [RESET]\r\n");
+#if SENSOR_GY91
+    uart_cli_send("  MPU MAG\r\n");
+    uart_cli_send("  MPU MAG STREAM ON|OFF\r\n");
+#endif
     uart_cli_send("  MAD SHOW\r\n");
     uart_cli_send("  MAD BETA <value>\r\n");
     uart_cli_send("  MAD RESET\r\n");
@@ -165,7 +177,7 @@ void app_cli_handle_line(const char *line)
     uart_cli_send("  EKF RESET\r\n");
     uart_cli_send("  EKF BIAS\r\n");
     uart_cli_send("  EKF DIAG\r\n");
-    uart_cli_send("  EKF TUNE <sigma_g> <sigma_b> <sigma_a> <r_k>\r\n");
+    uart_cli_send("  EKF TUNE <sigma_g> <sigma_b> <sigma_a> <sigma_m> <r_k>\r\n");
     uart_cli_send("  MPU CAL GYRO <ms>\r\n");
     uart_cli_send("  MPU CAL SHOW\r\n");
     uart_cli_send("  MPU CAL CLEAR\r\n");
@@ -264,10 +276,26 @@ void app_cli_handle_line(const char *line)
   if (strcmp(argv[0], "MPU") == 0)
   {
     extern I2C_HandleTypeDef hi2c1;
+#if !SENSOR_GY91
+    /* cfg is shared across MPU CFG / MPU INIT on the legacy path only.
+     * On the GY91 path each handler declares its own local cfg.         */
     static mpu6050_cfg_t cfg;
+#endif
 
     if (argc >= 2 && strcmp(argv[1], "WHOAMI") == 0)
     {
+#if SENSOR_GY91
+      uint8_t id = 0;
+      if (mpu9255_whoami(&hi2c1, MPU9255_ADDR_7BIT, &id) != MPU9255_OK)
+      {
+        uart_cli_send("ERR: whoami\r\n");
+        return;
+      }
+      uart_cli_sendf("MPU addr=0x%02X WHO_AM_I=0x%02X (%s)\r\n",
+                     MPU9255_ADDR_7BIT, id,
+                     (id == MPU9255_WHOAMI_VAL) ? "MPU-9255" : (id == MPU9250_WHOAMI_VAL) ? "MPU-9250"
+                                                                                          : "unknown");
+#else
       uint8_t id = 0;
       if (mpu6050_whoami(&hi2c1, MPU6050_ADDR7_DEFAULT, &id) != MPU6050_OK)
       {
@@ -275,13 +303,34 @@ void app_cli_handle_line(const char *line)
         return;
       }
       uart_cli_sendf("MPU addr=0x%02X WHO_AM_I=0x%02X\r\n", MPU6050_ADDR7_DEFAULT, id);
+#endif
       return;
     }
 
     if (argc >= 2 && strcmp(argv[1], "INIT") == 0)
     {
+#if SENSOR_GY91
+      mpu9255_cfg_t cfg;
+      mpu9255_status_t st = mpu9255_init_100hz(&hi2c1, MPU9255_ADDR_7BIT, &cfg);
+      if (st == MPU9255_ERR_ID)
+      {
+        uart_cli_send("ERR: wrong WHO_AM_I (not MPU-9255/9250?)\r\n");
+        return;
+      }
+      if (st != MPU9255_OK)
+      {
+        uart_cli_send("ERR: mpu9255 init failed\r\n");
+        return;
+      }
+      /* Enable bypass to expose AK8963 on the I2C bus */
+      if (mpu9255_enable_bypass(&hi2c1, MPU9255_ADDR_7BIT) != MPU9255_OK)
+      {
+        uart_cli_send("ERR: bypass enable failed\r\n");
+        return;
+      }
+      uart_cli_send("mpu init ok (MPU-9255, bypass enabled)\r\n");
+#else
       mpu6050_status_t st = mpu6050_init_100hz(&hi2c1, MPU6050_ADDR7_DEFAULT, &cfg);
-
       if (st == MPU6050_ERR_ID)
       {
         uart_cli_send("ERR: wrong WHO_AM_I (not MPU6050?)\r\n");
@@ -292,37 +341,59 @@ void app_cli_handle_line(const char *line)
         uart_cli_send("ERR: init failed\r\n");
         return;
       }
-
       uart_cli_send("mpu init ok\r\n");
+#endif
       return;
     }
 
     if (argc >= 2 && strcmp(argv[1], "CFG") == 0)
     {
+#if SENSOR_GY91
+      mpu9255_cfg_t cfg;
+      if (mpu9255_read_cfg(&hi2c1, MPU9255_ADDR_7BIT, &cfg) != MPU9255_OK)
+      {
+        uart_cli_send("ERR: cfg\r\n");
+        return;
+      }
+      uart_cli_sendf("WHOAMI=0x%02X PWR=0x%02X DIV=%u CFG=0x%02X GYRO=0x%02X ACC=0x%02X\r\n",
+                     cfg.whoami, cfg.pwr_mgmt_1, cfg.smplrt_div, cfg.config,
+                     cfg.gyro_config, cfg.accel_config);
+#else
       if (mpu6050_read_cfg(&hi2c1, MPU6050_ADDR7_DEFAULT, &cfg) != MPU6050_OK)
       {
         uart_cli_send("ERR: cfg\r\n");
         return;
       }
-
       uart_cli_sendf("WHOAMI=0x%02X PWR=0x%02X DIV=%u CFG=0x%02X GYRO=0x%02X ACC=0x%02X\r\n",
                      cfg.whoami, cfg.pwr_mgmt_1, cfg.smplrt_div, cfg.config,
                      cfg.gyro_config, cfg.accel_config);
+#endif
       return;
     }
 
     if (argc >= 2 && strcmp(argv[1], "READ") == 0)
     {
+#if SENSOR_GY91
+      mpu9255_raw_t r;
+      if (mpu9255_read_raw(&hi2c1, MPU9255_ADDR_7BIT, &r) != MPU9255_OK)
+      {
+        uart_cli_send("ERR: read\r\n");
+        return;
+      }
+      uart_cli_sendf("ax=%d ay=%d az=%d temp=%d gx=%d gy=%d gz=%d\r\n",
+                     (int)r.ax, (int)r.ay, (int)r.az, (int)r.temp,
+                     (int)r.gx, (int)r.gy, (int)r.gz);
+#else
       mpu6050_raw_t r;
       if (mpu6050_read_raw(&hi2c1, MPU6050_ADDR7_DEFAULT, &r) != MPU6050_OK)
       {
         uart_cli_send("ERR: read\r\n");
         return;
       }
-
       uart_cli_sendf("ax=%d ay=%d az=%d temp=%d gx=%d gy=%d gz=%d\r\n",
                      (int)r.ax, (int)r.ay, (int)r.az, (int)r.temp,
                      (int)r.gx, (int)r.gy, (int)r.gz);
+#endif
       return;
     }
 
@@ -451,7 +522,110 @@ void app_cli_handle_line(const char *line)
       return;
     }
 
-    uart_cli_send("usage: MPU WHOAMI|INIT|CFG|READ|STREAM ON|OFF|PRINT <N>|RATE|STATS [RESET]\r\n");
+#if SENSOR_GY91
+    if (argc >= 4 && strcmp(argv[1], "MAG") == 0 && strcmp(argv[2], "STREAM") == 0)
+    {
+      if (strcmp(argv[3], "ON") == 0)
+      {
+        imu_app_mag_stream_set(true);
+        uart_cli_send("mag cal stream (M,...) on\r\n");
+      }
+      else if (strcmp(argv[3], "OFF") == 0)
+      {
+        imu_app_mag_stream_set(false);
+        uart_cli_send("mag cal stream off\r\n");
+      }
+      else
+      {
+        uart_cli_send("usage: MPU MAG STREAM ON|OFF\r\n");
+      }
+      return;
+    }
+
+    if (argc == 2 && strcmp(argv[1], "MAG") == 0)
+    {
+      /* Direct live read — bypass the poll-loop buffer.
+       * AK8963 at 100 Hz: new sample every ~10 ms.
+       * Retry up to 5 times (×3 ms = 15 ms max) to catch DRDY. */
+      ak8963_raw_t mag;
+      mag.valid = 0;
+      for (int attempt = 0; attempt < 5; attempt++)
+      {
+        if (ak8963_read_raw(&hi2c1, &mag) == AK8963_OK && mag.valid)
+          break;
+        HAL_Delay(3);
+      }
+
+      /* ASA correction factors (read once at boot, stored in imu_app) */
+      ak8963_cfg_t ak;
+      imu_app_get_ak_cfg(&ak);
+
+      /* Body-frame µT: apply remap then ASA × 0.15 µT/LSB
+       * REMAP swaps X↔Y and negates Z (AK8963 die vs accel/gyro die).
+       * Print × 100 for 2 decimal places without float printf.            */
+      int16_t mx_b = (int16_t)REMAP_MX(mag.mx, mag.my, mag.mz);
+      int16_t my_b = (int16_t)REMAP_MY(mag.mx, mag.my, mag.mz);
+      int16_t mz_b = (int16_t)REMAP_MZ(mag.mx, mag.my, mag.mz);
+
+      int32_t mx_100 = (int32_t)((float)mx_b * ak.asa_x * 15.0f); /* × 0.15 × 100 = × 15 */
+      int32_t my_100 = (int32_t)((float)my_b * ak.asa_y * 15.0f);
+      int32_t mz_100 = (int32_t)((float)mz_b * ak.asa_z * 15.0f);
+
+      /* Norm × 100 (integer sqrt via Newton step — good enough for display) */
+      float mx_f = (float)mx_100 * 0.01f;
+      float my_f = (float)my_100 * 0.01f;
+      float mz_f = (float)mz_100 * 0.01f;
+      int32_t norm_100 = (int32_t)(sqrtf(mx_f * mx_f + my_f * my_f + mz_f * mz_f) * 100.0f);
+
+      /* ASA as X.XXX */
+      int32_t asa_xi = (int32_t)(ak.asa_x * 1000.0f);
+      int32_t asa_yi = (int32_t)(ak.asa_y * 1000.0f);
+      int32_t asa_zi = (int32_t)(ak.asa_z * 1000.0f);
+
+#define _ABS(x) ((x) < 0 ? -(x) : (x))
+      uart_cli_sendf("--- AK8963 sensor frame (raw) ---\r\n");
+      uart_cli_sendf("mx_s=%d  my_s=%d  mz_s=%d  valid=%u\r\n",
+                     (int)mag.mx, (int)mag.my, (int)mag.mz, (unsigned)mag.valid);
+
+      uart_cli_sendf("--- Body frame (remapped + ASA + 0.15 uT/LSB) ---\r\n");
+      uart_cli_sendf("mx=%ld.%02lu  my=%ld.%02lu  mz=%ld.%02lu  uT\r\n",
+                     (long)(mx_100 / 100), (unsigned long)_ABS(mx_100 % 100),
+                     (long)(my_100 / 100), (unsigned long)_ABS(my_100 % 100),
+                     (long)(mz_100 / 100), (unsigned long)_ABS(mz_100 % 100));
+      uart_cli_sendf("norm=%ld.%02lu uT\r\n",
+                     (long)(norm_100 / 100), (unsigned long)(norm_100 % 100));
+
+      uart_cli_sendf("--- Body frame (calibrated) ---\r\n");
+      float mx_cal = MAG_CAL_S11 * (mx_f - MAG_CAL_BX) + MAG_CAL_S12 * (my_f - MAG_CAL_BY) + MAG_CAL_S13 * (mz_f - MAG_CAL_BZ);
+      float my_cal = MAG_CAL_S21 * (mx_f - MAG_CAL_BX) + MAG_CAL_S22 * (my_f - MAG_CAL_BY) + MAG_CAL_S23 * (mz_f - MAG_CAL_BZ);
+      float mz_cal = MAG_CAL_S31 * (mx_f - MAG_CAL_BX) + MAG_CAL_S32 * (my_f - MAG_CAL_BY) + MAG_CAL_S33 * (mz_f - MAG_CAL_BZ);
+
+      int32_t mx_cal_100 = (int32_t)(mx_cal * 100.0f);
+      int32_t my_cal_100 = (int32_t)(my_cal * 100.0f);
+      int32_t mz_cal_100 = (int32_t)(mz_cal * 100.0f);
+      int32_t norm_cal_100 = (int32_t)(sqrtf(mx_cal * mx_cal + my_cal * my_cal + mz_cal * mz_cal) * 100.0f);
+
+      uart_cli_sendf("mx=%ld.%02lu  my=%ld.%02lu  mz=%ld.%02lu  uT\r\n",
+                     (long)(mx_cal_100 / 100), (unsigned long)_ABS(mx_cal_100 % 100),
+                     (long)(my_cal_100 / 100), (unsigned long)_ABS(my_cal_100 % 100),
+                     (long)(mz_cal_100 / 100), (unsigned long)_ABS(mz_cal_100 % 100));
+      uart_cli_sendf("norm=%ld.%02lu uT\r\n",
+                     (long)(norm_cal_100 / 100), (unsigned long)(norm_cal_100 % 100));
+
+      uart_cli_sendf("asa=%ld.%03lu / %ld.%03lu / %ld.%03lu  (x/y/z)\r\n",
+                     (long)(asa_xi / 1000), (unsigned long)(asa_xi % 1000),
+                     (long)(asa_yi / 1000), (unsigned long)(asa_yi % 1000),
+                     (long)(asa_zi / 1000), (unsigned long)(asa_zi % 1000));
+#undef _ABS
+      return;
+    }
+#endif /* SENSOR_GY91 */
+
+    uart_cli_send("usage: MPU WHOAMI|INIT|CFG|READ|STREAM ON|OFF|PRINT <N>|RATE|STATS [RESET]|CAL ..."
+#if SENSOR_GY91
+                  "|MAG|MAG STREAM"
+#endif
+                  "\r\n");
     return;
   }
 
@@ -581,23 +755,24 @@ void app_cli_handle_line(const char *line)
       return;
     }
 
-    if (argc >= 6 && strcmp(argv[1], "TUNE") == 0)
+    if (argc >= 7 && strcmp(argv[1], "TUNE") == 0)
     {
       float sg = (float)strtod(argv[2], NULL);
       float sb = (float)strtod(argv[3], NULL);
       float sa = (float)strtod(argv[4], NULL);
-      float rk = (float)strtod(argv[5], NULL);
-      if (sg <= 0.0f || sb <= 0.0f || sa <= 0.0f || rk < 0.0f)
+      float sm = (float)strtod(argv[5], NULL);
+      float rk = (float)strtod(argv[6], NULL);
+      if (sg <= 0.0f || sb <= 0.0f || sa <= 0.0f || sm <= 0.0f || rk < 0.0f)
       {
         uart_cli_send("ERR: all params must be > 0 (r_k >= 0)\r\n");
         return;
       }
-      imu_app_ekf_set_noise(sg, sb, sa, rk);
+      imu_app_ekf_set_noise(sg, sb, sa, sm, rk);
       uart_cli_send("ok\r\n");
       return;
     }
 
-    uart_cli_send("usage: EKF SHOW | EKF RESET | EKF BIAS | EKF DIAG | EKF TUNE <sg> <sb> <sa> <rk>\r\n");
+    uart_cli_send("usage: EKF SHOW | EKF RESET | EKF BIAS | EKF DIAG | EKF TUNE <sg> <sb> <sa> <sm> <rk>\r\n");
     return;
   }
 

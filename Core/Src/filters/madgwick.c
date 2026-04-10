@@ -131,6 +131,52 @@ void madgwick_init_from_accel(madgwick_t *m, float ax, float ay, float az)
   // NOTE: intentionally keep learned bias (gbx/gby/gbz) — don't throw it away
 }
 
+void madgwick_init_from_marg(madgwick_t *m,
+                             float ax, float ay, float az,
+                             float mx, float my, float mz)
+{
+  if (!m)
+    return;
+
+  // 1) roll/pitch from accel (yaw=0 baseline)
+  madgwick_init_from_accel(m, ax, ay, az);
+
+  // 2) yaw from normalized magnetometer
+  float m2 = mx * mx + my * my + mz * mz;
+  if (m2 < MADGWICK_EPS)
+    return;
+
+  float invm = math3d_inv_sqrtf(m2);
+  mx *= invm;
+  my *= invm;
+  mz *= invm;
+
+  float q0 = m->q0, q1 = m->q1, q2 = m->q2, q3 = m->q3;
+
+  // De-rotate mag into earth frame for yaw solve (same convention as EKF init).
+  float hx = 2.0f * (mx * (0.5f - q2 * q2 - q3 * q3) + my * (q1 * q2 - q0 * q3) + mz * (q1 * q3 + q0 * q2));
+  float hy = 2.0f * (mx * (q1 * q2 + q0 * q3) + my * (0.5f - q1 * q1 - q3 * q3) + mz * (q2 * q3 - q0 * q1));
+
+  float yaw = atan2f(-hy, hx);
+  float cy = cosf(0.5f * yaw);
+  float sy = sinf(0.5f * yaw);
+
+  // Pre-multiply by pure-yaw quaternion [cy, 0, 0, sy]
+  float t0 = cy * q0 - sy * q3;
+  float t1 = cy * q1 - sy * q2;
+  float t2 = cy * q2 + sy * q1;
+  float t3 = cy * q3 + sy * q0;
+
+  math3d_quat_normalize(&t0, &t1, &t2, &t3);
+  m->q0 = t0;
+  m->q1 = t1;
+  m->q2 = t2;
+  m->q3 = t3;
+
+  // Restart adaptive-beta ramp from this aligned state.
+  m->elapsed_s = 0.0f;
+}
+
 static void integrate_gyro_only(madgwick_t *m, float wx, float wy, float wz, float dt_s)
 {
   float q0 = m->q0, q1 = m->q1, q2 = m->q2, q3 = m->q3;
@@ -274,6 +320,150 @@ void madgwick_update_imu(madgwick_t *m,
   float qDot3 = 0.5f * (q0 * wz + q1 * wy - q2 * wx) - beta_eff * s3;
 
   // ---- 10. integrate + normalize ----
+  q0 += qDot0 * dt_s;
+  q1 += qDot1 * dt_s;
+  q2 += qDot2 * dt_s;
+  q3 += qDot3 * dt_s;
+
+  math3d_quat_normalize(&q0, &q1, &q2, &q3);
+  m->q0 = q0;
+  m->q1 = q1;
+  m->q2 = q2;
+  m->q3 = q3;
+}
+
+void madgwick_update_marg(madgwick_t *m,
+                          float wx, float wy, float wz,
+                          float ax_g, float ay_g, float az_g,
+                          float mx, float my, float mz,
+                          float dt_s)
+{
+  if (!m || dt_s <= 0.0f)
+    return;
+
+  // Fallback to IMU mode if mag data is zero/invalid
+  float m2 = mx * mx + my * my + mz * mz;
+  if (m2 < MADGWICK_EPS)
+  {
+    madgwick_update_imu(m, wx, wy, wz, ax_g, ay_g, az_g, dt_s);
+    return;
+  }
+
+  // ---- 1. advance elapsed time ----
+  m->elapsed_s += dt_s;
+
+  // ---- 2. adaptive beta ----
+  float beta_eff;
+  if (m->beta_decay_s > 0.0f && m->elapsed_s < m->beta_decay_s)
+  {
+    float t = m->elapsed_s / m->beta_decay_s;
+    beta_eff = m->beta_start + (m->beta - m->beta_start) * t;
+  }
+  else
+  {
+    beta_eff = m->beta;
+  }
+
+  // ---- 3. gyro bias ---
+  wx -= m->gbx;
+  wy -= m->gby;
+  wz -= m->gbz;
+
+  // ---- 4. accel motion adaptation ----
+  float a2 = ax_g * ax_g + ay_g * ay_g + az_g * az_g;
+  float a_mag = math3d_sqrtf(a2);
+
+  if (m->beta_motion_k > 0.0f)
+  {
+    float dev = a_mag - 1.0f;
+    beta_eff /= (1.0f + m->beta_motion_k * dev * dev);
+  }
+  if (beta_eff < m->beta_min)
+    beta_eff = m->beta_min;
+
+  if (m->accel_reject_en && !(a_mag >= m->accel_reject_min_g && a_mag <= m->accel_reject_max_g))
+  {
+    integrate_gyro_only(m, wx, wy, wz, dt_s);
+    return;
+  }
+
+  if (a2 < MADGWICK_EPS)
+  {
+    integrate_gyro_only(m, wx, wy, wz, dt_s);
+    return;
+  }
+
+  // normalize accel and mag
+  float inva = math3d_inv_sqrtf(a2);
+  float ax = ax_g * inva;
+  float ay = ay_g * inva;
+  float az = az_g * inva;
+
+  float invm = math3d_inv_sqrtf(m2);
+  mx *= invm;
+  my *= invm;
+  mz *= invm;
+
+  float q0 = m->q0, q1 = m->q1, q2 = m->q2, q3 = m->q3;
+
+  // Aux variables
+  float q0q1 = q0 * q1;
+  float q0q2 = q0 * q2;
+  float q0q3 = q0 * q3;
+  float q1q1 = q1 * q1;
+  float q1q2 = q1 * q2;
+  float q1q3 = q1 * q3;
+  float q2q2 = q2 * q2;
+  float q2q3 = q2 * q3;
+  float q3q3 = q3 * q3;
+
+  // Reference direction of Earth's magnetic field
+  float hx = 2.0f * (mx * (0.5f - q2q2 - q3q3) + my * (q1q2 - q0q3) + mz * (q1q3 + q0q2));
+  float hy = 2.0f * (mx * (q1q2 + q0q3) + my * (0.5f - q1q1 - q3q3) + mz * (q2q3 - q0q1));
+  float hz = 2.0f * (mx * (q1q3 - q0q2) + my * (q2q3 + q0q1) + mz * (0.5f - q1q1 - q2q2));
+  float bx = math3d_sqrtf(hx * hx + hy * hy);
+  float bz = hz;
+
+  float _2q0 = 2.0f * q0;
+  float _2q1 = 2.0f * q1;
+  float _2q2 = 2.0f * q2;
+  float _2q3 = 2.0f * q3;
+  float _2bx = 2.0f * bx;
+  float _2bz = 2.0f * bz;
+  float _4bx = 4.0f * bx;
+  float _4bz = 4.0f * bz;
+
+  // Gradient computation
+  float s0 = -_2q2 * (2.0f * q1q3 - 2.0f * q0q2 - ax) + _2q1 * (2.0f * q0q1 + 2.0f * q2q3 - ay) - _2bz * q2 * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (-_2bx * q3 + _2bz * q1) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + _2bx * q2 * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
+  float s1 = _2q3 * (2.0f * q1q3 - 2.0f * q0q2 - ax) + _2q0 * (2.0f * q0q1 + 2.0f * q2q3 - ay) - 4.0f * q1 * (1.0f - 2.0f * q1q1 - 2.0f * q2q2 - az) + _2bz * q3 * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (_2bx * q2 + _2bz * q0) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + (_2bx * q3 - _4bz * q1) * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
+  float s2 = -_2q0 * (2.0f * q1q3 - 2.0f * q0q2 - ax) + _2q3 * (2.0f * q0q1 + 2.0f * q2q3 - ay) - 4.0f * q2 * (1.0f - 2.0f * q1q1 - 2.0f * q2q2 - az) + (-_4bx * q2 - _2bz * q0) * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (_2bx * q1 + _2bz * q3) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + (_2bx * q0 - _4bz * q2) * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
+  float s3 = _2q1 * (2.0f * q1q3 - 2.0f * q0q2 - ax) + _2q2 * (2.0f * q0q1 + 2.0f * q2q3 - ay) + (-_4bx * q3 + _2bz * q1) * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (-_2bx * q0 + _2bz * q2) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + _2bx * q1 * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
+
+  float s2n = s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3;
+  if (s2n > MADGWICK_EPS)
+  {
+    float invs = math3d_inv_sqrtf(s2n);
+    s0 *= invs;
+    s1 *= invs;
+    s2 *= invs;
+    s3 *= invs;
+  }
+
+  // gyro bias
+  if (m->zeta > 0.0f)
+  {
+    m->gbx += 2.0f * dt_s * m->zeta * (q0 * s1 - q1 * s0 + q2 * s3 - q3 * s2);
+    m->gby += 2.0f * dt_s * m->zeta * (q0 * s2 - q1 * s3 - q2 * s0 + q3 * s1);
+    m->gbz += 2.0f * dt_s * m->zeta * (q0 * s3 + q1 * s2 - q2 * s1 - q3 * s0);
+  }
+
+  // qDot
+  float qDot0 = 0.5f * (-q1 * wx - q2 * wy - q3 * wz) - beta_eff * s0;
+  float qDot1 = 0.5f * (q0 * wx + q2 * wz - q3 * wy) - beta_eff * s1;
+  float qDot2 = 0.5f * (q0 * wy - q1 * wz + q3 * wx) - beta_eff * s2;
+  float qDot3 = 0.5f * (q0 * wz + q1 * wy - q2 * wx) - beta_eff * s3;
+
+  // Integrate
   q0 += qDot0 * dt_s;
   q1 += qDot1 * dt_s;
   q2 += qDot2 * dt_s;

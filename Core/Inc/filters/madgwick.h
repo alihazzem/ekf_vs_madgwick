@@ -56,6 +56,12 @@ extern "C"
   // Call this before the first madgwick_update_imu to skip the cold-start convergence.
   void madgwick_init_from_accel(madgwick_t *m, float ax, float ay, float az);
 
+  // Initialise quaternion from accel + mag (sets roll/pitch from gravity,
+  // then yaw from magnetic heading). Use when absolute startup yaw is desired.
+  void madgwick_init_from_marg(madgwick_t *m,
+                               float ax, float ay, float az,
+                               float mx, float my, float mz);
+
   /**
    * Update (IMU-only, no magnetometer)
    * gyro: rad/s
@@ -66,6 +72,19 @@ extern "C"
                            float wx, float wy, float wz,
                            float ax_g, float ay_g, float az_g,
                            float dt_s);
+
+  /**
+   * Update (MARG - Magnetic, Angular Rate, and Gravity)
+   * gyro: rad/s
+   * accel: g (doesn't need to be normalized)
+   * mag: uT (doesn't need to be normalized, must be calibrated)
+   * dt: seconds
+   */
+  void madgwick_update_marg(madgwick_t *m,
+                            float wx, float wy, float wz,
+                            float ax_g, float ay_g, float az_g,
+                            float mx, float my, float mz,
+                            float dt_s);
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,5 @@
 #include "app/imu_app.h"
 #include "drivers/uart_cli.h"
-#include "drivers/mpu6050.h"
 #include "utils/timebase.h"
 #include "filters/madgwick.h"
 #include "filters/ekf.h"
@@ -8,7 +7,15 @@
 #include "app/imu_types.h"
 #include "app/app_config.h"
 
+#if SENSOR_GY91
+#include "drivers/mpu9255.h"
+#include "drivers/ak8963.h"
+#else
+#include "drivers/mpu6050.h"
+#endif
+
 #include <string.h>
+#include <math.h> /* sqrtf for mag norm */
 
 static I2C_HandleTypeDef *s_hi2c = NULL;
 
@@ -21,7 +28,27 @@ static uint32_t s_tick_count = 0;
 static uint32_t s_sample_count = 0;
 static uint32_t s_missed = 0;
 
+#if SENSOR_GY91
+static mpu9255_raw_t s_last;
+static ak8963_raw_t s_last_mag;
+static ak8963_cfg_t s_ak_cfg;
+/* Body-frame magnetometer (µT): remap + ASA applied, not yet calibrated */
+static float s_mx_ut = 0.0f;
+static float s_my_ut = 0.0f;
+static float s_mz_ut = 0.0f;
+static float s_m_norm = 0.0f;
+static uint8_t s_mag_body_valid = 0;
+/* Calibrated body-frame mag (µT): hard + soft iron correction applied */
+static float s_mx_cal_ut = 0.0f;
+static float s_my_cal_ut = 0.0f;
+static float s_mz_cal_ut = 0.0f;
+static float s_m_cal_norm = 0.0f;
+static uint8_t s_mag_cal_valid = 0;
+/* Flag: emit M, lines for offline ellipsoid calibration capture */
+static volatile bool s_mag_stream_en = false;
+#else
 static mpu6050_raw_t s_last;
+#endif
 
 // time + dt stats
 static uint32_t s_reset_ms = 0;
@@ -68,6 +95,31 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
   s_hi2c = hi2c;
   imu_app_stats_reset();
 
+#if SENSOR_GY91
+  /* ---- GY-91: MPU-9255 + AK8963 bring-up ---- */
+  {
+    mpu9255_cfg_t mpu_cfg;
+    mpu9255_status_t st = mpu9255_init_100hz(hi2c, MPU9255_ADDR_7BIT, &mpu_cfg);
+    if (st == MPU9255_OK)
+    {
+      /* Enable bypass so STM32 can reach AK8963 on the same bus */
+      mpu9255_enable_bypass(hi2c, MPU9255_ADDR_7BIT);
+
+      /* Read sensitivity adjustment from AK8963 fuse ROM */
+      if (ak8963_read_asa(hi2c, &s_ak_cfg) == AK8963_OK)
+      {
+        /* Start continuous 100 Hz 16-bit measurement */
+        ak8963_init_continuous_100hz(hi2c);
+      }
+    }
+    /* Zero-initialise last mag sample — valid=0 until first read */
+    s_last_mag.mx = 0;
+    s_last_mag.my = 0;
+    s_last_mag.mz = 0;
+    s_last_mag.valid = 0;
+  }
+#endif /* SENSOR_GY91 */
+
   // Madgwick init
   madgwick_init(&s_mad, MADGWICK_BETA);
   madgwick_set_accel_reject(&s_mad,
@@ -82,7 +134,7 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
   s_mad_aligned = 0;
 
 #if RUN_EKF
-  ekf7_init(&s_ekf, EKF_SIGMA_GYRO, EKF_SIGMA_BIAS, EKF_SIGMA_ACCEL,
+  ekf7_init(&s_ekf, EKF_SIGMA_GYRO, EKF_SIGMA_BIAS, EKF_SIGMA_ACCEL, EKF_SIGMA_MAG,
             EKF_R_ADAPT_K, EKF_P0);
   /* Hard-reject window disabled — adaptive R handles dynamics gracefully */
   ekf7_set_accel_reject(&s_ekf, true, 0.85f, 1.15f);
@@ -128,9 +180,17 @@ void imu_app_poll(void)
   // measure service time around the I2C read
   uint32_t t0 = now_cyc;
 
-  // read MPU
+  // read IMU (accel + gyro)
+#if SENSOR_GY91
+  if (mpu9255_read_raw(s_hi2c, MPU9255_ADDR_7BIT, &s_last) == MPU9255_OK)
+  {
+    /* Best-effort AK8963 read — if DRDY=0, s_last_mag.valid stays 0
+     * and the previous sample is preserved unchanged.              */
+    ak8963_read_raw(s_hi2c, &s_last_mag);
+#else
   if (mpu6050_read_raw(s_hi2c, MPU6050_ADDR_7BIT, &s_last) == MPU6050_OK)
   {
+#endif /* SENSOR_GY91 */
 
     // ---- compute dt (seconds) from last successful sample ----
     float dt_s = 0.0f;
@@ -192,18 +252,81 @@ void imu_app_poll(void)
     float wx = REMAP_WX(wx_s, wy_s, wz_s);
     float wy = REMAP_WY(wx_s, wy_s, wz_s);
     float wz = REMAP_WZ(wx_s, wy_s, wz_s);
-    // ---- First-sample gravity alignment (both filters) ----
+
+#if SENSOR_GY91
+    // ---- AK8963 → body-frame µT (remap + ASA + scale) ----
+    if (s_last_mag.valid)
+    {
+      float mx_s = (float)REMAP_MX(s_last_mag.mx, s_last_mag.my, s_last_mag.mz);
+      float my_s = (float)REMAP_MY(s_last_mag.mx, s_last_mag.my, s_last_mag.mz);
+      float mz_s = (float)REMAP_MZ(s_last_mag.mx, s_last_mag.my, s_last_mag.mz);
+
+      s_mx_ut = mx_s * s_ak_cfg.asa_x * AK8963_UT_PER_LSB;
+      s_my_ut = my_s * s_ak_cfg.asa_y * AK8963_UT_PER_LSB;
+      s_mz_ut = mz_s * s_ak_cfg.asa_z * AK8963_UT_PER_LSB;
+
+      float n2 = s_mx_ut * s_mx_ut + s_my_ut * s_my_ut + s_mz_ut * s_mz_ut;
+      s_m_norm = (n2 > 0.0f) ? sqrtf(n2) : 0.0f;
+      s_mag_body_valid = (s_m_norm >= 5.0f && s_m_norm <= 100.0f) ? 1u : 0u;
+
+      // ---- Apply hard/soft-iron calibration (from app_config.h) ----
+      float bx = s_mx_ut - MAG_CAL_BX;
+      float by = s_my_ut - MAG_CAL_BY;
+      float bz = s_mz_ut - MAG_CAL_BZ;
+      s_mx_cal_ut = MAG_CAL_S11 * bx + MAG_CAL_S12 * by + MAG_CAL_S13 * bz;
+      s_my_cal_ut = MAG_CAL_S21 * bx + MAG_CAL_S22 * by + MAG_CAL_S23 * bz;
+      s_mz_cal_ut = MAG_CAL_S31 * bx + MAG_CAL_S32 * by + MAG_CAL_S33 * bz;
+      float cn2 = s_mx_cal_ut * s_mx_cal_ut + s_my_cal_ut * s_my_cal_ut + s_mz_cal_ut * s_mz_cal_ut;
+      s_m_cal_norm = (cn2 > 0.0f) ? sqrtf(cn2) : 0.0f;
+      s_mag_cal_valid = (s_m_cal_norm >= 5.0f && s_m_cal_norm <= 100.0f) ? 1u : 0u;
+
+      // ---- Emit M, line for offline calibration capture ----
+      if (s_mag_stream_en)
+      {
+        /* Emit body-frame (uncalibrated) µT × 100 as integers:
+         * the Python script divides by 100 to recover float µT. */
+        int32_t mx_100 = (int32_t)(s_mx_ut * 100.0f);
+        int32_t my_100 = (int32_t)(s_my_ut * 100.0f);
+        int32_t mz_100 = (int32_t)(s_mz_ut * 100.0f);
+        uart_cli_sendf("M,%ld,%ld,%ld\r\n",
+                       (long)mx_100, (long)my_100, (long)mz_100);
+      }
+    }
+#endif /* SENSOR_GY91 */
+
     // On the very first valid sample initialise each filter's quaternion from
     // the accelerometer so roll/pitch are correct immediately.
     if (!s_mad_aligned)
     {
+#if SENSOR_GY91
+      if (s_mag_cal_valid)
+      {
+        madgwick_init_from_marg(&s_mad, ax_g, ay_g, az_g, s_mx_cal_ut, s_my_cal_ut, s_mz_cal_ut);
+      }
+      else
+      {
+        madgwick_init_from_accel(&s_mad, ax_g, ay_g, az_g);
+      }
+#else
       madgwick_init_from_accel(&s_mad, ax_g, ay_g, az_g);
+#endif
       s_mad_aligned = 1;
     }
 #if RUN_EKF
     if (!s_ekf_aligned)
     {
+#if SENSOR_GY91
+      if (s_mag_cal_valid)
+      {
+        ekf7_init_from_marg(&s_ekf, ax_g, ay_g, az_g, s_mx_cal_ut, s_my_cal_ut, s_mz_cal_ut);
+      }
+      else
+      {
+        ekf7_init_from_accel(&s_ekf, ax_g, ay_g, az_g);
+      }
+#else
       ekf7_init_from_accel(&s_ekf, ax_g, ay_g, az_g);
+#endif
       s_ekf_aligned = 1;
     }
 #endif
@@ -213,7 +336,20 @@ void imu_app_poll(void)
     if (dt_s > 0.0f)
     {
       uint32_t t_mad0 = timebase_cycles();
+#if SENSOR_GY91
+      // Safety threshold: Only use mag if the calibrated norm is roughly Earth-like (5 to 100 uT).
+      // This protects the robot from spinning out if it drives over a strong magnet.
+      if (s_m_cal_norm > 5.0f && s_m_cal_norm < 100.0f)
+      {
+        madgwick_update_marg(&s_mad, wx, wy, wz, ax_g, ay_g, az_g, s_mx_cal_ut, s_my_cal_ut, s_mz_cal_ut, dt_s);
+      }
+      else
+      {
+        madgwick_update_imu(&s_mad, wx, wy, wz, ax_g, ay_g, az_g, dt_s);
+      }
+#else
       madgwick_update_imu(&s_mad, wx, wy, wz, ax_g, ay_g, az_g, dt_s);
+#endif
       s_mad_last_us = timebase_cycles_to_us(timebase_cycles() - t_mad0);
 
       s_mad_att.q0 = s_mad.q0;
@@ -234,7 +370,20 @@ void imu_app_poll(void)
     if (dt_s > 0.0f)
     {
       uint32_t t_ekf0 = timebase_cycles();
+#if SENSOR_GY91
+      // Safety threshold: Only use mag if the calibrated norm is roughly Earth-like (5 to 100 uT).
+      // This protects the robot from spinning out if it drives over a strong magnet.
+      if (s_last_mag.valid && s_mag_cal_valid)
+      {
+        ekf7_step_marg(&s_ekf, wx, wy, wz, ax_g, ay_g, az_g, s_mx_cal_ut, s_my_cal_ut, s_mz_cal_ut, dt_s);
+      }
+      else
+      {
+        ekf7_step(&s_ekf, wx, wy, wz, ax_g, ay_g, az_g, dt_s);
+      }
+#else
       ekf7_step(&s_ekf, wx, wy, wz, ax_g, ay_g, az_g, dt_s);
+#endif
       s_ekf_last_us = timebase_cycles_to_us(timebase_cycles() - t_ekf0);
 
       float q_tmp[4];
@@ -280,7 +429,9 @@ void imu_app_poll(void)
       {
         float b_tmp[3] = {0.0f, 0.0f, 0.0f};
         ekf7_get_bias(&s_ekf, b_tmp);
-        bx_f = b_tmp[0]; by_f = b_tmp[1]; bz_f = b_tmp[2];
+        bx_f = b_tmp[0];
+        by_f = b_tmp[1];
+        bz_f = b_tmp[2];
       }
 #endif
       int32_t bx_ur = (int32_t)(bx_f * 1e6f); // µrad/s
@@ -308,7 +459,11 @@ void imu_app_poll(void)
   }
   else
   {
+#if SENSOR_GY91
+    uart_cli_send("mpu9255 read error\r\n");
+#else
     uart_cli_send("mpu read error\r\n");
+#endif
   }
 
   uint32_t t1 = timebase_cycles();
@@ -351,6 +506,19 @@ void imu_app_stats_reset(void)
   s_missed = 0;
 
   memset(&s_last, 0, sizeof(s_last));
+#if SENSOR_GY91
+  memset(&s_last_mag, 0, sizeof(s_last_mag));
+  s_mx_ut = 0.0f;
+  s_my_ut = 0.0f;
+  s_mz_ut = 0.0f;
+  s_m_norm = 0.0f;
+  s_mx_cal_ut = 0.0f;
+  s_my_cal_ut = 0.0f;
+  s_mz_cal_ut = 0.0f;
+  s_m_cal_norm = 0.0f;
+  s_mag_body_valid = 0;
+  s_mag_cal_valid = 0;
+#endif
 
   s_reset_ms = HAL_GetTick();
   s_last_sample_cyc = 0;
@@ -504,11 +672,23 @@ bool imu_app_cal_gyro(uint32_t duration_ms)
   int64_t sum_y = 0;
   int64_t sum_z = 0;
 
-  mpu6050_raw_t r;
-
+#if SENSOR_GY91
+  mpu9255_raw_t r;
   while ((HAL_GetTick() - start) < duration_ms)
   {
-
+    if (mpu9255_read_raw(s_hi2c, MPU9255_ADDR_7BIT, &r) == MPU9255_OK)
+    {
+      sum_x += r.gx;
+      sum_y += r.gy;
+      sum_z += r.gz;
+      count++;
+    }
+    HAL_Delay(2);
+  }
+#else
+  mpu6050_raw_t r;
+  while ((HAL_GetTick() - start) < duration_ms)
+  {
     if (mpu6050_read_raw(s_hi2c, MPU6050_ADDR_7BIT, &r) == MPU6050_OK)
     {
       sum_x += r.gx;
@@ -516,9 +696,9 @@ bool imu_app_cal_gyro(uint32_t duration_ms)
       sum_z += r.gz;
       count++;
     }
-
     HAL_Delay(2); // small delay (~500 Hz max read)
   }
+#endif /* SENSOR_GY91 */
 
   if (count == 0)
     return false;
@@ -569,10 +749,10 @@ void imu_app_ekf_reset(void)
 }
 
 void imu_app_ekf_set_noise(float sigma_gyro, float sigma_bias,
-                           float sigma_accel, float r_adapt_k)
+                           float sigma_accel, float sigma_mag, float r_adapt_k)
 {
   __disable_irq();
-  ekf7_set_noise(&s_ekf, sigma_gyro, sigma_bias, sigma_accel, r_adapt_k);
+  ekf7_set_noise(&s_ekf, sigma_gyro, sigma_bias, sigma_accel, sigma_mag, r_adapt_k);
   __enable_irq();
 }
 
@@ -602,3 +782,74 @@ uint32_t imu_app_ekf_last_us(void)
 {
   return s_ekf_last_us;
 }
+
+#if SENSOR_GY91
+/* ----------------------------------------------------------------
+ * Magnetometer raw getters (CLI diagnostic use only in Phase 1).
+ * ---------------------------------------------------------------- */
+void imu_app_get_mag_raw(ak8963_raw_t *out)
+{
+  if (!out)
+    return;
+  __disable_irq();
+  *out = s_last_mag;
+  __enable_irq();
+}
+
+void imu_app_get_ak_cfg(ak8963_cfg_t *out)
+{
+  if (!out)
+    return;
+  *out = s_ak_cfg; /* written once at init, never changes */
+}
+
+/* Body-frame magnetometer (uncalibrated) getter. */
+void imu_app_get_mag_body(float *mx_ut, float *my_ut, float *mz_ut,
+                          float *norm, uint8_t *valid)
+{
+  __disable_irq();
+  if (mx_ut)
+    *mx_ut = s_mx_ut;
+  if (my_ut)
+    *my_ut = s_my_ut;
+  if (mz_ut)
+    *mz_ut = s_mz_ut;
+  if (norm)
+    *norm = s_m_norm;
+  if (valid)
+    *valid = s_mag_body_valid;
+  __enable_irq();
+}
+
+/* Calibrated body-frame magnetometer getter (hard + soft iron applied). */
+void imu_app_get_mag_cal(float *mx_ut, float *my_ut, float *mz_ut,
+                         float *norm, uint8_t *valid)
+{
+  __disable_irq();
+  if (mx_ut)
+    *mx_ut = s_mx_cal_ut;
+  if (my_ut)
+    *my_ut = s_my_cal_ut;
+  if (mz_ut)
+    *mz_ut = s_mz_cal_ut;
+  if (norm)
+    *norm = s_m_cal_norm;
+  if (valid)
+    *valid = s_mag_cal_valid;
+  __enable_irq();
+}
+
+/* Enable/disable M, line emission for offline calibration capture.
+ * Automatically starts the main poll loop if not already running.  */
+void imu_app_mag_stream_set(bool en)
+{
+  s_mag_stream_en = en;
+  if (en)
+    imu_app_stream_set(true); /* poll loop must be running */
+}
+
+bool imu_app_mag_stream_get(void)
+{
+  return s_mag_stream_en;
+}
+#endif /* SENSOR_GY91 */
