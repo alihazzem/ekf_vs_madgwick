@@ -17,7 +17,7 @@ mpu6050_status_t mpu6050_whoami(I2C_HandleTypeDef *hi2c, uint8_t addr7, uint8_t 
   return MPU6050_OK;
 }
 
-mpu6050_status_t mpu6050_init_100hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6050_cfg_t *out_cfg)
+mpu6050_status_t mpu6050_init_500hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6050_cfg_t *out_cfg)
 {
   if (!hi2c || !out_cfg) return MPU6050_ERR_PARAM;
 
@@ -37,8 +37,8 @@ mpu6050_status_t mpu6050_init_100hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6
 
   // 3) Sample rate: with DLPF enabled, internal rate = 1kHz
   //    Output rate = 1000 / (1 + SMPLRT_DIV)
-  //    For 100 Hz => SMPLRT_DIV = 9
-  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_SMPLRT_DIV, 9u, 50) != I2C_REG_OK)
+  //    For 500 Hz => SMPLRT_DIV = 1
+  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_SMPLRT_DIV, 1u, 50) != I2C_REG_OK)
     return MPU6050_ERR_I2C;
 
   // 4) DLPF (CONFIG): choose a safe moderate filter (DLPF_CFG=3)

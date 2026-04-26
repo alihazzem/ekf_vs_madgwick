@@ -15,7 +15,7 @@
 #define AK8963_ADDR_7BIT 0x0C /* Fixed address, not user-configurable */
 
 /* ====== SAMPLE RATE ====== */
-#define IMU_FS_HZ 100.0f
+#define IMU_FS_HZ 500.0f
 #define IMU_DT_S (1.0f / IMU_FS_HZ)
 
 /* ====== ENABLE/DISABLE FILTERS ====== */
@@ -27,7 +27,7 @@
 #define LOG_HEADER_ONCE 1
 
 /* ====== MADGWICK PARAM ====== */
-#define MADGWICK_BETA 0.08f      // final/steady-state beta
+#define MADGWICK_BETA 0.04f      // final/steady-state beta
 #define MADGWICK_BETA_START 0.5f // initial beta for fast convergence
 #define MADGWICK_BETA_DECAY_S \
   2.0f                       // seconds to ramp from BETA_START down to BETA
@@ -42,7 +42,7 @@
  * <sigma_accel> <sigma_mag> <r_adapt_k>
  */
 #define EKF_SIGMA_GYRO 0.01f  /* gyro noise density  rad/s/sqrt(Hz)  */
-#define EKF_SIGMA_BIAS 5e-5f  /* bias random-walk    rad/s^2/sqrt(Hz) */
+#define EKF_SIGMA_BIAS 1e-6f  /* bias random-walk    rad/s^2/sqrt(Hz) */
 #define EKF_SIGMA_ACCEL 0.05f /* accel noise density g/sqrt(Hz)       */
 #define EKF_SIGMA_MAG 5.0f    /* stability-first mag trust (slower yaw lock) */
 #define EKF_R_ADAPT_K 50.0f   /* adaptive-R steepness (higher -> faster trust drop during motion) \
@@ -50,6 +50,11 @@
 #define EKF_P0                                                                \
   1.0f /* initial P diagonal  (high = uncertain at start -> fast convergence) \
         */
+
+#define EKF_ACCEL_REJECT_EN 1
+#define EKF_ACCEL_MIN_G 0.85f
+#define EKF_ACCEL_MAX_G 1.15f
+#define EKF_ACCEL_TIMEOUT_S 0.1f
 
 /* ====== MPU6050 SETTINGS ====== */
 #define MPU6050_ADDR_7BIT 0x68 // AD0=0 -> 0x68, AD0=1 -> 0x69

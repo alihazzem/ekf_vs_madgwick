@@ -99,7 +99,7 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
   /* ---- GY-91: MPU-9255 + AK8963 bring-up ---- */
   {
     mpu9255_cfg_t mpu_cfg;
-    mpu9255_status_t st = mpu9255_init_100hz(hi2c, MPU9255_ADDR_7BIT, &mpu_cfg);
+    mpu9255_status_t st = mpu9255_init_500hz(hi2c, MPU9255_ADDR_7BIT, &mpu_cfg);
     if (st == MPU9255_OK)
     {
       /* Enable bypass so STM32 can reach AK8963 on the same bus */
@@ -137,13 +137,13 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
   ekf7_init(&s_ekf, EKF_SIGMA_GYRO, EKF_SIGMA_BIAS, EKF_SIGMA_ACCEL, EKF_SIGMA_MAG,
             EKF_R_ADAPT_K, EKF_P0);
   /* Hard-reject window disabled — adaptive R handles dynamics gracefully */
-  ekf7_set_accel_reject(&s_ekf, true, 0.85f, 1.15f);
+  ekf7_set_accel_reject(&s_ekf, EKF_ACCEL_REJECT_EN, EKF_ACCEL_MIN_G, EKF_ACCEL_MAX_G, EKF_ACCEL_TIMEOUT_S);
   s_ekf_valid = 0;
   s_ekf_aligned = 0;
 #endif
 }
 
-void imu_app_on_100hz_tick(void)
+void imu_app_on_tick(void)
 {
   s_tick_count++;
 
@@ -197,9 +197,13 @@ void imu_app_poll(void)
     if (prev_cyc != 0u)
     {
       uint32_t dt_cyc = now_cyc - prev_cyc;
-      uint32_t dt_us = timebase_cycles_to_us(dt_cyc);
 
-      dt_s = (float)dt_us * 1e-6f;
+      /* Use full 84MHz resolution (11.9ns) for the filter integration time.
+       * This avoids the ~1us rounding error inherent in timebase_cycles_to_us(). */
+      dt_s = (float)dt_cyc / 84000000.0f;
+
+      // Keep integer dt_us for stats and display
+      uint32_t dt_us = timebase_cycles_to_us(dt_cyc);
 
       // dt stats
       if (dt_us < s_dt_min_us)

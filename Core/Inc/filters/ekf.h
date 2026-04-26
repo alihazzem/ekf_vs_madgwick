@@ -58,6 +58,8 @@ extern "C"
         bool accel_reject_en;
         float accel_reject_min_g; /* below this -> skip update entirely */
         float accel_reject_max_g; /* above this -> skip update entirely */
+        float accel_sane_timer_s;
+        float accel_sane_timeout_s;
 
     } ekf7_t;
 
@@ -95,7 +97,7 @@ extern "C"
      *         When enabled, if |a| is outside [min_g, max_g] the measurement
      *         update is skipped entirely (before adaptive R even applies).
      */
-    void ekf7_set_accel_reject(ekf7_t *e, bool en, float min_g, float max_g);
+    void ekf7_set_accel_reject(ekf7_t *e, bool en, float min_g, float max_g, float timeout_s);
 
     /**
      * @brief  Update noise parameters at runtime (re-buildable via CLI).
@@ -143,8 +145,9 @@ extern "C"
      *         Adaptive R scales measurement noise with ||a|-1| deviation.
      *
      * @param ax_g/ay_g/az_g  Accel in g (body frame)
+     * @param dt_s            Measured time-step in seconds
      */
-    void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g);
+    void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g, float dt_s);
 
     /**
      * @brief  Convenience: calls ekf7_predict then ekf7_update_accel.

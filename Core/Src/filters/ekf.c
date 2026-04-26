@@ -315,18 +315,20 @@ void ekf7_reset(ekf7_t *e)
     e->b[0] = 0.0f; e->b[1] = 0.0f; e->b[2] = 0.0f;
 
     e->mag_ref_valid = false;
+    e->accel_sane_timer_s = 0.0f;
 
     memset(e->P, 0, sizeof(e->P));
     for (int i = 0; i < 7; i++)
         e->P[i][i] = e->P0;
 }
 
-void ekf7_set_accel_reject(ekf7_t *e, bool en, float min_g, float max_g)
+void ekf7_set_accel_reject(ekf7_t *e, bool en, float min_g, float max_g, float timeout_s)
 {
     if (!e) return;
     e->accel_reject_en    = en;
     e->accel_reject_min_g = min_g;
     e->accel_reject_max_g = max_g;
+    e->accel_sane_timeout_s = timeout_s;
 }
 
 void ekf7_set_noise(ekf7_t *e,
@@ -526,7 +528,7 @@ void ekf7_predict(ekf7_t *e, float wx, float wy, float wz, float dt_s)
  *   dev   = |a_raw_mag| - 1
  *   R_eff = sigma_accel^2 * (1 + k*dev^2) * I_3
  * ----------------------------------------------------------------------- */
-void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g)
+void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g, float dt_s)
 {
     if (!e) return;
 
@@ -538,7 +540,16 @@ void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g)
     if (e->accel_reject_en)
     {
         if (a_mag < e->accel_reject_min_g || a_mag > e->accel_reject_max_g)
+        {
+            e->accel_sane_timer_s = 0.0f;
             return;
+        }
+
+        e->accel_sane_timer_s += dt_s;
+        if (e->accel_sane_timer_s < e->accel_sane_timeout_s)
+        {
+            return;
+        }
     }
 
     if (a_mag < 1e-9f) return;
@@ -654,7 +665,7 @@ void ekf7_step(ekf7_t *e,
                float dt_s)
 {
     ekf7_predict(e, wx, wy, wz, dt_s);
-    ekf7_update_accel(e, ax_g, ay_g, az_g);
+    ekf7_update_accel(e, ax_g, ay_g, az_g, dt_s);
 }
 
 /* -----------------------------------------------------------------------
@@ -820,7 +831,7 @@ void ekf7_step_marg(ekf7_t *e,
                     float dt_s)
 {
     ekf7_predict(e, wx, wy, wz, dt_s);
-    ekf7_update_accel(e, ax_g, ay_g, az_g);
+    ekf7_update_accel(e, ax_g, ay_g, az_g, dt_s);
     ekf7_update_mag(e, mx, my, mz);
 }
 

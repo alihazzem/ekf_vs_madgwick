@@ -42,7 +42,8 @@ typedef struct
 
 // Core app hooks
 void imu_app_init(I2C_HandleTypeDef *hi2c);
-void imu_app_on_100hz_tick(void); // call from TIM2 callback
+void imu_app_on_tick(void);
+ // call from TIM2 callback
 void imu_app_poll(void);          // call from main loop
 
 // control

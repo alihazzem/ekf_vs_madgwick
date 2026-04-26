@@ -54,3 +54,4 @@ correlation_results/*
 .venv/*
 scripts/*
 matlab/*
+emg_v2/*
