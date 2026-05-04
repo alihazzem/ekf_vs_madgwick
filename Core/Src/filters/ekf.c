@@ -158,23 +158,9 @@ static bool ekf7_set_mag_reference_from_body(ekf7_t *e, float mx, float my, floa
     if (!v3_normalize(m_e))
         return false;
 
-    /* Project onto horizontal plane — mag correction is yaw-only.
-     * This is deliberate: inclination-angle corrections from mag in an
-     * indoor environment add noise without improving pitch/roll (which the
-     * accelerometer handles better).
-     *
-     * FIX #6: If the horizontal component is near zero (sensor pointing
-     * straight up or down), the normalize below would fail.  We now detect
-     * this explicitly and return false rather than silently keeping a stale
-     * reference.  The caller sets mag_ref_valid = false so the next call
-     * with a better orientation triggers a clean re-bootstrap. */
-    m_e[2] = 0.0f;
-    if (!v3_normalize(m_e))
-        return false;   /* sensor too near vertical — can't extract yaw */
-
     e->mag_ref_n[0] = m_e[0];
     e->mag_ref_n[1] = m_e[1];
-    e->mag_ref_n[2] = 0.0f;
+    e->mag_ref_n[2] = m_e[2];
     return true;
 }
 
@@ -630,6 +616,8 @@ void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g, float dt_s
         float db = 0.0f;
         for (int m = 0; m < 3; m++) db += s_K[i+4][m] * y[m];
         e->b[i] += db;
+        if      (e->b[i] >  0.05f) e->b[i] =  0.05f;
+        else if (e->b[i] < -0.05f) e->b[i] = -0.05f;
     }
 
     float qn = sqrtf(e->q[0]*e->q[0] + e->q[1]*e->q[1] +

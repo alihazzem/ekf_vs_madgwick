@@ -34,17 +34,33 @@ static float clampf(float x, float lo, float hi)
 void math3d_quat_to_euler_deg(float q0, float q1, float q2, float q3,
                              float *roll_deg, float *pitch_deg, float *yaw_deg)
 {
-  float sinr_cosp = 2.0f * (q0*q1 + q2*q3);
-  float cosr_cosp = 1.0f - 2.0f * (q1*q1 + q2*q2);
-  float roll = atan2f(sinr_cosp, cosr_cosp);
-
+  /* Compute sinp first so the gimbal-lock check can gate the other axes. */
   float sinp = 2.0f * (q0*q2 - q3*q1);
   sinp = clampf(sinp, -1.0f, 1.0f);
   float pitch = asinf(sinp);
 
-  float siny_cosp = 2.0f * (q0*q3 + q1*q2);
-  float cosy_cosp = 1.0f - 2.0f * (q2*q2 + q3*q3);
-  float yaw = atan2f(siny_cosp, cosy_cosp);
+  float roll, yaw;
+
+  /* Gimbal-lock singularity: pitch = ±90°.
+   * When |sinp| → 1, cosp → 0 and atan2(0,0) is undefined for roll and yaw.
+   * At the north/south pole only the sum/difference (roll ± yaw) is observable,
+   * so we assign all rotation to roll and set yaw = 0 by convention. */
+  if (fabsf(sinp) >= 0.9999f)
+  {
+    roll = atan2f(2.0f * (q1*q2 - q0*q3),
+                  1.0f - 2.0f * (q1*q1 + q3*q3));
+    yaw  = 0.0f;
+  }
+  else
+  {
+    float sinr_cosp = 2.0f * (q0*q1 + q2*q3);
+    float cosr_cosp = 1.0f - 2.0f * (q1*q1 + q2*q2);
+    roll = atan2f(sinr_cosp, cosr_cosp);
+
+    float siny_cosp = 2.0f * (q0*q3 + q1*q2);
+    float cosy_cosp = 1.0f - 2.0f * (q2*q2 + q3*q3);
+    yaw = atan2f(siny_cosp, cosy_cosp);
+  }
 
   const float RAD2DEG = 57.29577951308232f;
   if (roll_deg)  *roll_deg  = roll  * RAD2DEG;

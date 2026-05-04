@@ -311,7 +311,7 @@ void app_cli_handle_line(const char *line)
     {
 #if SENSOR_GY91
       mpu9255_cfg_t cfg;
-      mpu9255_status_t st = mpu9255_init_500hz(&hi2c1, MPU9255_ADDR_7BIT, &cfg);
+      mpu9255_status_t st = mpu9255_init_200hz(&hi2c1, MPU9255_ADDR_7BIT, &cfg);
 
       if (st == MPU9255_ERR_ID)
       {
@@ -331,7 +331,7 @@ void app_cli_handle_line(const char *line)
       }
       uart_cli_send("mpu init ok (MPU-9255, bypass enabled)\r\n");
 #else
-      mpu6050_status_t st = mpu6050_init_500hz(&hi2c1, MPU6050_ADDR7_DEFAULT, &cfg);
+      mpu6050_status_t st = mpu6050_init_200hz(&hi2c1, MPU6050_ADDR7_DEFAULT, &cfg);
       if (st == MPU6050_ERR_ID)
       {
         uart_cli_send("ERR: wrong WHO_AM_I (not MPU6050?)\r\n");

@@ -99,7 +99,7 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
   /* ---- GY-91: MPU-9255 + AK8963 bring-up ---- */
   {
     mpu9255_cfg_t mpu_cfg;
-    mpu9255_status_t st = mpu9255_init_500hz(hi2c, MPU9255_ADDR_7BIT, &mpu_cfg);
+    mpu9255_status_t st = mpu9255_init_200hz(hi2c, MPU9255_ADDR_7BIT, &mpu_cfg);
     if (st == MPU9255_OK)
     {
       /* Enable bypass so STM32 can reach AK8963 on the same bus */
@@ -234,10 +234,10 @@ void imu_app_poll(void)
       s_win_samples = 0;
     }
 
-    // Sensor-frame accel (g)
-    float ax_s = (float)s_last.ax / ACC_LSB_PER_G;
-    float ay_s = (float)s_last.ay / ACC_LSB_PER_G;
-    float az_s = (float)s_last.az / ACC_LSB_PER_G;
+    // Sensor-frame accel (g) — bias-corrected then scaled
+    float ax_s = (float)(s_last.ax - ACCEL_BIAS_X) / ACC_LSB_PER_G;
+    float ay_s = (float)(s_last.ay - ACCEL_BIAS_Y) / ACC_LSB_PER_G;
+    float az_s = (float)(s_last.az - ACCEL_BIAS_Z) / ACC_LSB_PER_G;
 
     // Sensor-frame gyro (rad/s)
     int16_t gx_corr = s_last.gx - s_gx_off;
@@ -442,23 +442,41 @@ void imu_app_poll(void)
       int32_t by_ur = (int32_t)(by_f * 1e6f);
       int32_t bz_ur = (int32_t)(bz_f * 1e6f);
 
+      /* Quaternions ×1e6 — integer transport; divide by 1e6 in Python.
+       * Enables full-range ±180° pitch via atan2 in post-processing. */
+      int32_t mq0 = s_mad_valid ? (int32_t)(s_mad_att.q0 * 1e6f) : 1000000;
+      int32_t mq1 = s_mad_valid ? (int32_t)(s_mad_att.q1 * 1e6f) : 0;
+      int32_t mq2 = s_mad_valid ? (int32_t)(s_mad_att.q2 * 1e6f) : 0;
+      int32_t mq3 = s_mad_valid ? (int32_t)(s_mad_att.q3 * 1e6f) : 0;
+      int32_t eq0 = s_ekf_valid ? (int32_t)(s_ekf_att.q0 * 1e6f) : 1000000;
+      int32_t eq1 = s_ekf_valid ? (int32_t)(s_ekf_att.q1 * 1e6f) : 0;
+      int32_t eq2 = s_ekf_valid ? (int32_t)(s_ekf_att.q2 * 1e6f) : 0;
+      int32_t eq3 = s_ekf_valid ? (int32_t)(s_ekf_att.q3 * 1e6f) : 0;
+
+
       uart_cli_sendf("D,%lu,%d,%d,%d,%d,%d,%d,"
                      "%ld,%ld,%ld,%lu,"
                      "%ld,%ld,%ld,%ld,%lu,"
-                     "%ld,%ld,%ld\r\n",
+                     "%ld,%ld,%ld,"
+                     "%ld,%ld,%ld,%ld,"
+                     "%ld,%ld,%ld,%ld\r\n",
                      /* time */
                      (unsigned long)HAL_GetTick(),
                      /* raw sensor */
                      (int)s_last.ax, (int)s_last.ay, (int)s_last.az,
                      (int)s_last.gx, (int)s_last.gy, (int)s_last.gz,
-                     /* Madgwick */
+                     /* Madgwick Euler */
                      (long)mad_r, (long)mad_p, (long)mad_y,
                      (unsigned long)s_mad_last_us,
-                     /* EKF */
+                     /* EKF Euler */
                      (long)ekf_r, (long)ekf_p, (long)ekf_y,
                      (long)traceP, (unsigned long)s_ekf_last_us,
                      /* EKF bias */
-                     (long)bx_ur, (long)by_ur, (long)bz_ur);
+                     (long)bx_ur, (long)by_ur, (long)bz_ur,
+                     /* Madgwick quat x1e6 */
+                     (long)mq0, (long)mq1, (long)mq2, (long)mq3,
+                     /* EKF quat x1e6 */
+                     (long)eq0, (long)eq1, (long)eq2, (long)eq3);
     }
   }
   else

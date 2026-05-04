@@ -37,6 +37,6 @@ typedef enum {
 } mpu6050_status_t;
 
 mpu6050_status_t mpu6050_whoami(I2C_HandleTypeDef *hi2c, uint8_t addr7, uint8_t *out_id);
-mpu6050_status_t mpu6050_init_500hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6050_cfg_t *out_cfg);
+mpu6050_status_t mpu6050_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6050_cfg_t *out_cfg);
 mpu6050_status_t mpu6050_read_cfg(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6050_cfg_t *cfg);
 mpu6050_status_t mpu6050_read_raw(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6050_raw_t *out_raw);

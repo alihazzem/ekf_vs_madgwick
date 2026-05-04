@@ -24,11 +24,11 @@ mpu9255_status_t mpu9255_whoami(I2C_HandleTypeDef *hi2c, uint8_t addr7, uint8_t 
 }
 
 /* ----------------------------------------------------------------
- * mpu9255_init_500hz
- * Configure accel ±2 g, gyro ±250 dps, DLPF=3, output @ 500 Hz.
+ * mpu9255_init_200hz
+ * Configure accel ±2 g, gyro ±250 dps, DLPF=3, output @ 200 Hz.
  * Accepts WHO_AM_I = 0x73 (MPU-9255) or 0x71 (MPU-9250).
  * ---------------------------------------------------------------- */
-mpu9255_status_t mpu9255_init_500hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9255_cfg_t *out_cfg)
+mpu9255_status_t mpu9255_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9255_cfg_t *out_cfg)
 {
     if (!hi2c || !out_cfg) return MPU9255_ERR_PARAM;
 
@@ -44,8 +44,8 @@ mpu9255_status_t mpu9255_init_500hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9
         return MPU9255_ERR_I2C;
     HAL_Delay(10);
 
-    /* 3) Sample rate: 1 kHz / (1 + SMPLRT_DIV) = 500 Hz → DIV = 1 */
-    if (i2c_write_reg(hi2c, addr7, MPU9255_REG_SMPLRT_DIV, 1u, 50) != I2C_REG_OK)
+    /* 3) Sample rate: 1 kHz / (1 + SMPLRT_DIV) = 200 Hz → DIV = 4 */
+    if (i2c_write_reg(hi2c, addr7, MPU9255_REG_SMPLRT_DIV, 4u, 50) != I2C_REG_OK)
         return MPU9255_ERR_I2C;
 
     /* 4) DLPF_CFG = 3 (accel BW ~44 Hz, gyro BW ~42 Hz) */

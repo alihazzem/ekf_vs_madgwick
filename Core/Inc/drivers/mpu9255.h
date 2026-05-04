@@ -61,7 +61,7 @@ typedef enum {
 
 /* ── API ── */
 mpu9255_status_t mpu9255_whoami(I2C_HandleTypeDef *hi2c, uint8_t addr7, uint8_t *out_id);
-mpu9255_status_t mpu9255_init_500hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9255_cfg_t *out_cfg);
+mpu9255_status_t mpu9255_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9255_cfg_t *out_cfg);
 mpu9255_status_t mpu9255_read_cfg(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9255_cfg_t *cfg);
 mpu9255_status_t mpu9255_read_raw(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9255_raw_t *out_raw);
 mpu9255_status_t mpu9255_enable_bypass(I2C_HandleTypeDef *hi2c, uint8_t addr7);
