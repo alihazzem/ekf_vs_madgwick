@@ -1,9 +1,21 @@
 #include "drivers/mpu9255.h"
 #include "drivers/i2c_reg.h"
+#include "app/app_config.h"
 
 static int16_t be16(const uint8_t *p)
 {
     return (int16_t)(((int16_t)p[0] << 8) | p[1]);
+}
+
+static int mpu92xx_id_matches(uint8_t id)
+{
+#if MPU92XX_VARIANT == MPU92XX_VARIANT_9255
+    return (id == MPU9255_WHOAMI_VAL);
+#elif MPU92XX_VARIANT == MPU92XX_VARIANT_9250
+    return (id == MPU9250_WHOAMI_VAL);
+#else
+    return (id == MPU9255_WHOAMI_VAL || id == MPU9250_WHOAMI_VAL);
+#endif
 }
 
 /* ----------------------------------------------------------------
@@ -13,7 +25,8 @@ static int16_t be16(const uint8_t *p)
  * ---------------------------------------------------------------- */
 mpu9255_status_t mpu9255_whoami(I2C_HandleTypeDef *hi2c, uint8_t addr7, uint8_t *out_id)
 {
-    if (!hi2c || !out_id) return MPU9255_ERR_PARAM;
+    if (!hi2c || !out_id)
+        return MPU9255_ERR_PARAM;
 
     uint8_t id = 0;
     if (i2c_read_reg(hi2c, addr7, MPU9255_REG_WHO_AM_I, &id, 1, 50) != I2C_REG_OK)
@@ -26,17 +39,19 @@ mpu9255_status_t mpu9255_whoami(I2C_HandleTypeDef *hi2c, uint8_t addr7, uint8_t 
 /* ----------------------------------------------------------------
  * mpu9255_init_200hz
  * Configure accel ±2 g, gyro ±250 dps, DLPF=3, output @ 200 Hz.
- * Accepts WHO_AM_I = 0x73 (MPU-9255) or 0x71 (MPU-9250).
+ * Accepts WHO_AM_I based on MPU92XX_VARIANT in app_config.h.
  * ---------------------------------------------------------------- */
 mpu9255_status_t mpu9255_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9255_cfg_t *out_cfg)
 {
-    if (!hi2c || !out_cfg) return MPU9255_ERR_PARAM;
+    if (!hi2c || !out_cfg)
+        return MPU9255_ERR_PARAM;
 
     /* 1) Validate identity */
     uint8_t id = 0;
-    if (mpu9255_whoami(hi2c, addr7, &id) != MPU9255_OK) return MPU9255_ERR_I2C;
+    if (mpu9255_whoami(hi2c, addr7, &id) != MPU9255_OK)
+        return MPU9255_ERR_I2C;
 
-    if (id != MPU9255_WHOAMI_VAL && id != MPU9250_WHOAMI_VAL)
+    if (!mpu92xx_id_matches(id))
         return MPU9255_ERR_ID;
 
     /* 2) Wake up + select PLL clock (PWR_MGMT_1 = 0x01) */
@@ -61,7 +76,7 @@ mpu9255_status_t mpu9255_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9
         return MPU9255_ERR_I2C;
 
     /* 7) Read back config for CLI display */
-    out_cfg->addr7  = addr7;
+    out_cfg->addr7 = addr7;
     out_cfg->whoami = id;
     return mpu9255_read_cfg(hi2c, addr7, out_cfg);
 }
@@ -72,26 +87,33 @@ mpu9255_status_t mpu9255_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9
  * ---------------------------------------------------------------- */
 mpu9255_status_t mpu9255_read_cfg(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9255_cfg_t *cfg)
 {
-    if (!hi2c || !cfg) return MPU9255_ERR_PARAM;
+    if (!hi2c || !cfg)
+        return MPU9255_ERR_PARAM;
 
     uint8_t v = 0;
 
-    if (mpu9255_whoami(hi2c, addr7, &v) != MPU9255_OK) return MPU9255_ERR_I2C;
+    if (mpu9255_whoami(hi2c, addr7, &v) != MPU9255_OK)
+        return MPU9255_ERR_I2C;
     cfg->whoami = v;
 
-    if (i2c_read_reg(hi2c, addr7, MPU9255_REG_PWR_MGMT_1,  &v, 1, 50) != I2C_REG_OK) return MPU9255_ERR_I2C;
+    if (i2c_read_reg(hi2c, addr7, MPU9255_REG_PWR_MGMT_1, &v, 1, 50) != I2C_REG_OK)
+        return MPU9255_ERR_I2C;
     cfg->pwr_mgmt_1 = v;
 
-    if (i2c_read_reg(hi2c, addr7, MPU9255_REG_SMPLRT_DIV,  &v, 1, 50) != I2C_REG_OK) return MPU9255_ERR_I2C;
+    if (i2c_read_reg(hi2c, addr7, MPU9255_REG_SMPLRT_DIV, &v, 1, 50) != I2C_REG_OK)
+        return MPU9255_ERR_I2C;
     cfg->smplrt_div = v;
 
-    if (i2c_read_reg(hi2c, addr7, MPU9255_REG_CONFIG,       &v, 1, 50) != I2C_REG_OK) return MPU9255_ERR_I2C;
+    if (i2c_read_reg(hi2c, addr7, MPU9255_REG_CONFIG, &v, 1, 50) != I2C_REG_OK)
+        return MPU9255_ERR_I2C;
     cfg->config = v;
 
-    if (i2c_read_reg(hi2c, addr7, MPU9255_REG_GYRO_CONFIG,  &v, 1, 50) != I2C_REG_OK) return MPU9255_ERR_I2C;
+    if (i2c_read_reg(hi2c, addr7, MPU9255_REG_GYRO_CONFIG, &v, 1, 50) != I2C_REG_OK)
+        return MPU9255_ERR_I2C;
     cfg->gyro_config = v;
 
-    if (i2c_read_reg(hi2c, addr7, MPU9255_REG_ACCEL_CONFIG, &v, 1, 50) != I2C_REG_OK) return MPU9255_ERR_I2C;
+    if (i2c_read_reg(hi2c, addr7, MPU9255_REG_ACCEL_CONFIG, &v, 1, 50) != I2C_REG_OK)
+        return MPU9255_ERR_I2C;
     cfg->accel_config = v;
 
     cfg->addr7 = addr7;
@@ -105,19 +127,20 @@ mpu9255_status_t mpu9255_read_cfg(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu925
  * ---------------------------------------------------------------- */
 mpu9255_status_t mpu9255_read_raw(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9255_raw_t *out_raw)
 {
-    if (!hi2c || !out_raw) return MPU9255_ERR_PARAM;
+    if (!hi2c || !out_raw)
+        return MPU9255_ERR_PARAM;
 
     uint8_t buf[14];
     if (i2c_read_reg(hi2c, addr7, MPU9255_REG_ACCEL_XOUT_H, buf, sizeof(buf), 50) != I2C_REG_OK)
         return MPU9255_ERR_I2C;
 
-    out_raw->ax   = be16(&buf[0]);
-    out_raw->ay   = be16(&buf[2]);
-    out_raw->az   = be16(&buf[4]);
+    out_raw->ax = be16(&buf[0]);
+    out_raw->ay = be16(&buf[2]);
+    out_raw->az = be16(&buf[4]);
     out_raw->temp = be16(&buf[6]);
-    out_raw->gx   = be16(&buf[8]);
-    out_raw->gy   = be16(&buf[10]);
-    out_raw->gz   = be16(&buf[12]);
+    out_raw->gx = be16(&buf[8]);
+    out_raw->gy = be16(&buf[10]);
+    out_raw->gz = be16(&buf[12]);
 
     return MPU9255_OK;
 }
@@ -132,7 +155,8 @@ mpu9255_status_t mpu9255_read_raw(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu925
  * ---------------------------------------------------------------- */
 mpu9255_status_t mpu9255_enable_bypass(I2C_HandleTypeDef *hi2c, uint8_t addr7)
 {
-    if (!hi2c) return MPU9255_ERR_PARAM;
+    if (!hi2c)
+        return MPU9255_ERR_PARAM;
 
     uint8_t v = 0;
 

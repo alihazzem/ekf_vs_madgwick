@@ -106,7 +106,7 @@ bool connectToMyo() {
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(921600);
   BLEDevice::init("ESP32_Myo");
   startScan();
 }

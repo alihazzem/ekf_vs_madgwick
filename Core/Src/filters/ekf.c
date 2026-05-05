@@ -31,6 +31,7 @@
  */
 
 #include "filters/ekf.h"
+#include "app/app_config.h"
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -71,9 +72,7 @@ static void m77_mult(const float A[7][7], const float B[7][7], float C[7][7])
  */
 static int m33_inv(const float A[3][3], float Ainv[3][3])
 {
-    float d = A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1])
-            - A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0])
-            + A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]);
+    float d = A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1]) - A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0]) + A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]);
 
     if (d > -1e-12f && d < 1e-12f)
         return 0;
@@ -95,43 +94,55 @@ static int m33_inv(const float A[3][3], float Ainv[3][3])
 
 static int v3_normalize(float v[3])
 {
-    float n2 = v[0]*v[0] + v[1]*v[1] + v[2]*v[2];
+    float n2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
     if (n2 < 1e-12f)
         return 0;
     float inv = 1.0f / sqrtf(n2);
-    v[0] *= inv; v[1] *= inv; v[2] *= inv;
+    v[0] *= inv;
+    v[1] *= inv;
+    v[2] *= inv;
     return 1;
 }
 
 static void quat_normalize_local(float q[4])
 {
-    float n2 = q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3];
-    if (n2 < 1e-12f) { q[0]=1.0f; q[1]=0.0f; q[2]=0.0f; q[3]=0.0f; return; }
+    float n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+    if (n2 < 1e-12f)
+    {
+        q[0] = 1.0f;
+        q[1] = 0.0f;
+        q[2] = 0.0f;
+        q[3] = 0.0f;
+        return;
+    }
     float inv = 1.0f / sqrtf(n2);
-    q[0]*=inv; q[1]*=inv; q[2]*=inv; q[3]*=inv;
+    q[0] *= inv;
+    q[1] *= inv;
+    q[2] *= inv;
+    q[3] *= inv;
 }
 
 /* Predict magnetometer in body frame from fixed earth-frame reference.
  * h = R(q)^T * m_ref_n  (rotate earth-frame reference into body frame) */
 static void mag_predict_body_from_ref(const float q[4], const float m_ref_n[3], float h[3])
 {
-    float q0=q[0], q1=q[1], q2=q[2], q3=q[3];
-    float mx=m_ref_n[0], my=m_ref_n[1], mz=m_ref_n[2];
+    float q0 = q[0], q1 = q[1], q2 = q[2], q3 = q[3];
+    float mx = m_ref_n[0], my = m_ref_n[1], mz = m_ref_n[2];
 
-    h[0] = (1.0f - 2.0f*(q2*q2+q3*q3))*mx + 2.0f*(q1*q2+q0*q3)*my + 2.0f*(q1*q3-q0*q2)*mz;
-    h[1] = 2.0f*(q1*q2-q0*q3)*mx + (1.0f - 2.0f*(q1*q1+q3*q3))*my + 2.0f*(q2*q3+q0*q1)*mz;
-    h[2] = 2.0f*(q1*q3+q0*q2)*mx + 2.0f*(q2*q3-q0*q1)*my + (1.0f - 2.0f*(q1*q1+q2*q2))*mz;
+    h[0] = (1.0f - 2.0f * (q2 * q2 + q3 * q3)) * mx + 2.0f * (q1 * q2 + q0 * q3) * my + 2.0f * (q1 * q3 - q0 * q2) * mz;
+    h[1] = 2.0f * (q1 * q2 - q0 * q3) * mx + (1.0f - 2.0f * (q1 * q1 + q3 * q3)) * my + 2.0f * (q2 * q3 + q0 * q1) * mz;
+    h[2] = 2.0f * (q1 * q3 + q0 * q2) * mx + 2.0f * (q2 * q3 - q0 * q1) * my + (1.0f - 2.0f * (q1 * q1 + q2 * q2)) * mz;
 }
 
 /* Rotate body-frame mag to earth frame: m_e = R(q) * m_b */
 static void mag_rotate_body_to_earth(const float q[4], const float m_b[3], float m_e[3])
 {
-    float q0=q[0], q1=q[1], q2=q[2], q3=q[3];
-    float mx=m_b[0], my=m_b[1], mz=m_b[2];
+    float q0 = q[0], q1 = q[1], q2 = q[2], q3 = q[3];
+    float mx = m_b[0], my = m_b[1], mz = m_b[2];
 
-    m_e[0] = (1.0f - 2.0f*(q2*q2+q3*q3))*mx + 2.0f*(q1*q2-q0*q3)*my + 2.0f*(q1*q3+q0*q2)*mz;
-    m_e[1] = 2.0f*(q1*q2+q0*q3)*mx + (1.0f - 2.0f*(q1*q1+q3*q3))*my + 2.0f*(q2*q3-q0*q1)*mz;
-    m_e[2] = 2.0f*(q1*q3-q0*q2)*mx + 2.0f*(q2*q3+q0*q1)*my + (1.0f - 2.0f*(q1*q1+q2*q2))*mz;
+    m_e[0] = (1.0f - 2.0f * (q2 * q2 + q3 * q3)) * mx + 2.0f * (q1 * q2 - q0 * q3) * my + 2.0f * (q1 * q3 + q0 * q2) * mz;
+    m_e[1] = 2.0f * (q1 * q2 + q0 * q3) * mx + (1.0f - 2.0f * (q1 * q1 + q3 * q3)) * my + 2.0f * (q2 * q3 - q0 * q1) * mz;
+    m_e[2] = 2.0f * (q1 * q3 - q0 * q2) * mx + 2.0f * (q2 * q3 + q0 * q1) * my + (1.0f - 2.0f * (q1 * q1 + q2 * q2)) * mz;
 }
 
 /*
@@ -166,8 +177,8 @@ static bool ekf7_set_mag_reference_from_body(ekf7_t *e, float mx, float my, floa
 
 /* Numeric Jacobian for h_mag(q) — robust against algebra mistakes. */
 static void ekf7_build_mag_jacobian_numeric(const float q[4],
-                                             const float m_ref_n[3],
-                                             float H[3][7])
+                                            const float m_ref_n[3],
+                                            float H[3][7])
 {
     const float eps = 1e-4f;
     memset(H, 0, sizeof(float) * 3 * 7);
@@ -176,7 +187,8 @@ static void ekf7_build_mag_jacobian_numeric(const float q[4],
     {
         float qp[4] = {q[0], q[1], q[2], q[3]};
         float qm[4] = {q[0], q[1], q[2], q[3]};
-        qp[c] += eps; qm[c] -= eps;
+        qp[c] += eps;
+        qm[c] -= eps;
         quat_normalize_local(qp);
         quat_normalize_local(qm);
 
@@ -216,7 +228,7 @@ static void ekf7_cov_update_joseph(ekf7_t *e, const float H[3][7], float r_val)
         {
             float s = 0.0f;
             for (int k = 0; k < 7; k++)
-                s += s_AP[i][k] * s_A[j][k];   /* A^T[k][j] = A[j][k] */
+                s += s_AP[i][k] * s_A[j][k]; /* A^T[k][j] = A[j][k] */
             s_Pnew[i][j] = s;
         }
 
@@ -245,33 +257,23 @@ void ekf7_init(ekf7_t *e,
                float r_adapt_k,
                float P0)
 {
-    if (!e) return;
+    if (!e)
+        return;
 
-    e->sigma_gyro  = sigma_gyro;
-    e->sigma_bias  = sigma_bias;
+    e->sigma_gyro = sigma_gyro;
+    e->sigma_bias = sigma_bias;
     e->sigma_accel = sigma_accel;
-    e->sigma_mag   = sigma_mag;
-    e->r_adapt_k   = r_adapt_k;
-    e->P0          = P0;
+    e->sigma_mag = sigma_mag;
+    e->r_adapt_k = r_adapt_k;
+    e->P0 = P0;
 
     e->mag_ref_n[0] = 1.0f;
     e->mag_ref_n[1] = 0.0f;
     e->mag_ref_n[2] = 0.0f;
     e->mag_ref_valid = false;
 
-    /* FIX #1: NIS gate raised from 5.0 to 9.0.
-     *
-     * OLD value (5.0): For a 3-DOF chi-squared distribution the 5.0 threshold
-     * sits at the ~18th percentile — meaning ~18% of perfectly valid mag
-     * measurements were silently discarded every cycle.  At 100 Hz this was
-     * throwing away roughly 18 good samples per second, gutting yaw convergence.
-     *
-     * NEW value (9.0): Corresponds to the ~97th percentile of chi²(3).
-     * Outlier rejection still works — a genuinely bad measurement has NIS >> 9 —
-     * but valid measurements are accepted.  For very noisy indoor environments
-     * you can lower this to 7.8 (95th percentile); for clean outdoor use raise
-     * to 11.35 (99th percentile). */
-    e->mag_nis_gate = 9.0f;
+    /* Mag NIS gate is configurable via app_config.h. */
+    e->mag_nis_gate = EKF_MAG_NIS_GATE;
 
     /* FIX #4: Hard-reject ENABLED by default with a window appropriate for
      * a robotic shoulder joint.
@@ -286,7 +288,7 @@ void ekf7_init(ekf7_t *e,
      *   Upper bound 4.0g: rejects impact spikes while allowing normal
      *   robot acceleration (shoulder joint rarely exceeds 2g in normal motion).
      *   Adjust upper bound upward if your joint moves very fast. */
-    e->accel_reject_en  = true;
+    e->accel_reject_en = true;
     e->accel_reject_min_g = 0.3f;
     e->accel_reject_max_g = 4.0f;
 
@@ -295,10 +297,16 @@ void ekf7_init(ekf7_t *e,
 
 void ekf7_reset(ekf7_t *e)
 {
-    if (!e) return;
+    if (!e)
+        return;
 
-    e->q[0] = 1.0f; e->q[1] = 0.0f; e->q[2] = 0.0f; e->q[3] = 0.0f;
-    e->b[0] = 0.0f; e->b[1] = 0.0f; e->b[2] = 0.0f;
+    e->q[0] = 1.0f;
+    e->q[1] = 0.0f;
+    e->q[2] = 0.0f;
+    e->q[3] = 0.0f;
+    e->b[0] = 0.0f;
+    e->b[1] = 0.0f;
+    e->b[2] = 0.0f;
 
     e->mag_ref_valid = false;
     e->accel_sane_timer_s = 0.0f;
@@ -310,8 +318,9 @@ void ekf7_reset(ekf7_t *e)
 
 void ekf7_set_accel_reject(ekf7_t *e, bool en, float min_g, float max_g, float timeout_s)
 {
-    if (!e) return;
-    e->accel_reject_en    = en;
+    if (!e)
+        return;
+    e->accel_reject_en = en;
     e->accel_reject_min_g = min_g;
     e->accel_reject_max_g = max_g;
     e->accel_sane_timeout_s = timeout_s;
@@ -324,36 +333,39 @@ void ekf7_set_noise(ekf7_t *e,
                     float sigma_mag,
                     float r_adapt_k)
 {
-    if (!e) return;
-    e->sigma_gyro  = sigma_gyro;
-    e->sigma_bias  = sigma_bias;
+    if (!e)
+        return;
+    e->sigma_gyro = sigma_gyro;
+    e->sigma_bias = sigma_bias;
     e->sigma_accel = sigma_accel;
-    e->sigma_mag   = sigma_mag;
-    e->r_adapt_k   = r_adapt_k;
+    e->sigma_mag = sigma_mag;
+    e->r_adapt_k = r_adapt_k;
 }
 
 void ekf7_init_from_accel(ekf7_t *e, float ax_g, float ay_g, float az_g)
 {
-    if (!e) return;
+    if (!e)
+        return;
 
-    float a2 = ax_g*ax_g + ay_g*ay_g + az_g*az_g;
-    if (a2 < 1e-9f) return;
+    float a2 = ax_g * ax_g + ay_g * ay_g + az_g * az_g;
+    if (a2 < 1e-9f)
+        return;
 
     float inv = 1.0f / sqrtf(a2);
-    float ax  = ax_g * inv;
-    float ay  = ay_g * inv;
-    float az  = az_g * inv;
+    float ax = ax_g * inv;
+    float ay = ay_g * inv;
+    float az = az_g * inv;
 
-    float roll  = atan2f(ay, az);
-    float pitch = atan2f(-ax, sqrtf(ay*ay + az*az));
+    float roll = atan2f(ay, az);
+    float pitch = atan2f(-ax, sqrtf(ay * ay + az * az));
 
-    float cr = cosf(roll*0.5f),  sr = sinf(roll*0.5f);
-    float cp = cosf(pitch*0.5f), sp = sinf(pitch*0.5f);
+    float cr = cosf(roll * 0.5f), sr = sinf(roll * 0.5f);
+    float cp = cosf(pitch * 0.5f), sp = sinf(pitch * 0.5f);
 
     /* ZYX Euler → quaternion (yaw = 0 → cy=1, sy=0) */
-    e->q[0] =  cr * cp;
-    e->q[1] =  sr * cp;
-    e->q[2] =  cr * sp;
+    e->q[0] = cr * cp;
+    e->q[1] = sr * cp;
+    e->q[2] = cr * sp;
     e->q[3] = -sr * sp;
 
     /* FIX #3: Comment corrected.
@@ -372,38 +384,44 @@ void ekf7_init_from_accel(ekf7_t *e, float ax_g, float ay_g, float az_g)
 }
 
 void ekf7_init_from_marg(ekf7_t *e,
-                          float ax_g, float ay_g, float az_g,
-                          float mx,   float my,   float mz)
+                         float ax_g, float ay_g, float az_g,
+                         float mx, float my, float mz)
 {
-    if (!e) return;
+    if (!e)
+        return;
 
     ekf7_init_from_accel(e, ax_g, ay_g, az_g);
 
-    float m_mag = sqrtf(mx*mx + my*my + mz*mz);
-    if (m_mag < 1e-9f) return;
+    float m_mag = sqrtf(mx * mx + my * my + mz * mz);
+    if (m_mag < 1e-9f)
+        return;
     float inv_m = 1.0f / m_mag;
-    mx *= inv_m; my *= inv_m; mz *= inv_m;
+    mx *= inv_m;
+    my *= inv_m;
+    mz *= inv_m;
 
-    float q0=e->q[0], q1=e->q[1], q2=e->q[2], q3=e->q[3];
-    float hx = 2.0f*(mx*(0.5f-q2*q2-q3*q3) + my*(q1*q2-q0*q3) + mz*(q1*q3+q0*q2));
-    float hy = 2.0f*(mx*(q1*q2+q0*q3) + my*(0.5f-q1*q1-q3*q3) + mz*(q2*q3-q0*q1));
+    float q0 = e->q[0], q1 = e->q[1], q2 = e->q[2], q3 = e->q[3];
+    float hx = 2.0f * (mx * (0.5f - q2 * q2 - q3 * q3) + my * (q1 * q2 - q0 * q3) + mz * (q1 * q3 + q0 * q2));
+    float hy = 2.0f * (mx * (q1 * q2 + q0 * q3) + my * (0.5f - q1 * q1 - q3 * q3) + mz * (q2 * q3 - q0 * q1));
 
     float yaw = atan2f(-hy, hx);
-    float cy  = cosf(yaw*0.5f);
-    float sy  = sinf(yaw*0.5f);
+    float cy = cosf(yaw * 0.5f);
+    float sy = sinf(yaw * 0.5f);
 
     /* Pre-multiply q by q_yaw = [cy, 0, 0, sy] */
-    float t0 = cy*q0 - sy*q3;
-    float t1 = cy*q1 - sy*q2;
-    float t2 = cy*q2 + sy*q1;
-    float t3 = cy*q3 + sy*q0;
+    float t0 = cy * q0 - sy * q3;
+    float t1 = cy * q1 - sy * q2;
+    float t2 = cy * q2 + sy * q1;
+    float t3 = cy * q3 + sy * q0;
 
-    float qn = sqrtf(t0*t0 + t1*t1 + t2*t2 + t3*t3);
+    float qn = sqrtf(t0 * t0 + t1 * t1 + t2 * t2 + t3 * t3);
     if (qn > 1e-9f)
     {
         float qi = 1.0f / qn;
-        e->q[0] = t0*qi; e->q[1] = t1*qi;
-        e->q[2] = t2*qi; e->q[3] = t3*qi;
+        e->q[0] = t0 * qi;
+        e->q[1] = t1 * qi;
+        e->q[2] = t2 * qi;
+        e->q[3] = t3 * qi;
     }
 
     /* FIX #2 applied here: ekf7_set_mag_reference_from_body now returns bool.
@@ -438,9 +456,10 @@ void ekf7_init_from_marg(ekf7_t *e,
  * ----------------------------------------------------------------------- */
 void ekf7_predict(ekf7_t *e, float wx, float wy, float wz, float dt_s)
 {
-    if (!e || dt_s <= 0.0f) return;
+    if (!e || dt_s <= 0.0f)
+        return;
 
-    float q0=e->q[0], q1=e->q[1], q2=e->q[2], q3=e->q[3];
+    float q0 = e->q[0], q1 = e->q[1], q2 = e->q[2], q3 = e->q[3];
 
     float wx_c = wx - e->b[0];
     float wy_c = wy - e->b[1];
@@ -451,19 +470,41 @@ void ekf7_predict(ekf7_t *e, float wx, float wy, float wz, float dt_s)
     memset(s_F, 0, sizeof(s_F));
 
     /* F_qq block — verified correct (all 16 entries match Omega(w) definition) */
-    s_F[0][0]=1.0f; s_F[0][1]=-h*wx_c; s_F[0][2]=-h*wy_c; s_F[0][3]=-h*wz_c;
-    s_F[1][0]=h*wx_c; s_F[1][1]=1.0f; s_F[1][2]=h*wz_c; s_F[1][3]=-h*wy_c;
-    s_F[2][0]=h*wy_c; s_F[2][1]=-h*wz_c; s_F[2][2]=1.0f; s_F[2][3]=h*wx_c;
-    s_F[3][0]=h*wz_c; s_F[3][1]=h*wy_c; s_F[3][2]=-h*wx_c; s_F[3][3]=1.0f;
+    s_F[0][0] = 1.0f;
+    s_F[0][1] = -h * wx_c;
+    s_F[0][2] = -h * wy_c;
+    s_F[0][3] = -h * wz_c;
+    s_F[1][0] = h * wx_c;
+    s_F[1][1] = 1.0f;
+    s_F[1][2] = h * wz_c;
+    s_F[1][3] = -h * wy_c;
+    s_F[2][0] = h * wy_c;
+    s_F[2][1] = -h * wz_c;
+    s_F[2][2] = 1.0f;
+    s_F[2][3] = h * wx_c;
+    s_F[3][0] = h * wz_c;
+    s_F[3][1] = h * wy_c;
+    s_F[3][2] = -h * wx_c;
+    s_F[3][3] = 1.0f;
 
     /* F_qb block = -h * Xi(q) — verified correct (all 12 entries) */
-    s_F[0][4]=h*q1; s_F[0][5]=h*q2; s_F[0][6]=h*q3;
-    s_F[1][4]=-h*q0; s_F[1][5]=h*q3; s_F[1][6]=-h*q2;
-    s_F[2][4]=-h*q3; s_F[2][5]=-h*q0; s_F[2][6]=h*q1;
-    s_F[3][4]=h*q2; s_F[3][5]=-h*q1; s_F[3][6]=-h*q0;
+    s_F[0][4] = h * q1;
+    s_F[0][5] = h * q2;
+    s_F[0][6] = h * q3;
+    s_F[1][4] = -h * q0;
+    s_F[1][5] = h * q3;
+    s_F[1][6] = -h * q2;
+    s_F[2][4] = -h * q3;
+    s_F[2][5] = -h * q0;
+    s_F[2][6] = h * q1;
+    s_F[3][4] = h * q2;
+    s_F[3][5] = -h * q1;
+    s_F[3][6] = -h * q0;
 
     /* F_bb = I_3 */
-    s_F[4][4]=1.0f; s_F[5][5]=1.0f; s_F[6][6]=1.0f;
+    s_F[4][4] = 1.0f;
+    s_F[5][5] = 1.0f;
+    s_F[6][6] = 1.0f;
 
     /* Propagate quaternion: q_new = F_qq * q */
     float q_new[4] = {0};
@@ -471,13 +512,15 @@ void ekf7_predict(ekf7_t *e, float wx, float wy, float wz, float dt_s)
         for (int j = 0; j < 4; j++)
             q_new[i] += s_F[i][j] * e->q[j];
 
-    float qn = sqrtf(q_new[0]*q_new[0] + q_new[1]*q_new[1] +
-                     q_new[2]*q_new[2] + q_new[3]*q_new[3]);
+    float qn = sqrtf(q_new[0] * q_new[0] + q_new[1] * q_new[1] +
+                     q_new[2] * q_new[2] + q_new[3] * q_new[3]);
     if (qn > 1e-9f)
     {
         float qi = 1.0f / qn;
-        e->q[0]=q_new[0]*qi; e->q[1]=q_new[1]*qi;
-        e->q[2]=q_new[2]*qi; e->q[3]=q_new[3]*qi;
+        e->q[0] = q_new[0] * qi;
+        e->q[1] = q_new[1] * qi;
+        e->q[2] = q_new[2] * qi;
+        e->q[3] = q_new[3] * qi;
     }
 
     /* P = F * P * F^T + Q */
@@ -493,8 +536,10 @@ void ekf7_predict(ekf7_t *e, float wx, float wy, float wz, float dt_s)
 
     float q_var = e->sigma_gyro * e->sigma_gyro * dt_s;
     float b_var = e->sigma_bias * e->sigma_bias * dt_s;
-    for (int i = 0; i < 4; i++) e->P[i][i] += q_var;
-    for (int i = 4; i < 7; i++) e->P[i][i] += b_var;
+    for (int i = 0; i < 4; i++)
+        e->P[i][i] += q_var;
+    for (int i = 4; i < 7; i++)
+        e->P[i][i] += b_var;
 }
 
 /* -----------------------------------------------------------------------
@@ -516,9 +561,10 @@ void ekf7_predict(ekf7_t *e, float wx, float wy, float wz, float dt_s)
  * ----------------------------------------------------------------------- */
 void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g, float dt_s)
 {
-    if (!e) return;
+    if (!e)
+        return;
 
-    float a_mag = sqrtf(ax_g*ax_g + ay_g*ay_g + az_g*az_g);
+    float a_mag = sqrtf(ax_g * ax_g + ay_g * ay_g + az_g * az_g);
 
     /* FIX #4: Hard-reject now runs because accel_reject_en defaults to true.
      * This catches sensor faults and high-g impact spikes on the shoulder joint
@@ -538,25 +584,26 @@ void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g, float dt_s
         }
     }
 
-    if (a_mag < 1e-9f) return;
+    if (a_mag < 1e-9f)
+        return;
     float inv_a = 1.0f / a_mag;
-    float ax = ax_g*inv_a, ay = ay_g*inv_a, az = az_g*inv_a;
+    float ax = ax_g * inv_a, ay = ay_g * inv_a, az = az_g * inv_a;
 
-    float q0=e->q[0], q1=e->q[1], q2=e->q[2], q3=e->q[3];
+    float q0 = e->q[0], q1 = e->q[1], q2 = e->q[2], q3 = e->q[3];
 
-    float hx = 2.0f*(q1*q3 - q0*q2);
-    float hy = 2.0f*(q2*q3 + q0*q1);
-    float hz = q0*q0 - q1*q1 - q2*q2 + q3*q3;
+    float hx = 2.0f * (q1 * q3 - q0 * q2);
+    float hy = 2.0f * (q2 * q3 + q0 * q1);
+    float hz = q0 * q0 - q1 * q1 - q2 * q2 + q3 * q3;
 
-    float y[3] = {ax-hx, ay-hy, az-hz};
+    float y[3] = {ax - hx, ay - hy, az - hz};
 
     float H[3][7] = {
-        {-2.0f*q2,  2.0f*q3, -2.0f*q0,  2.0f*q1, 0, 0, 0},
-        { 2.0f*q1,  2.0f*q0,  2.0f*q3,  2.0f*q2, 0, 0, 0},
-        { 2.0f*q0, -2.0f*q1, -2.0f*q2,  2.0f*q3, 0, 0, 0}
-    };
+        {-2.0f * q2, 2.0f * q3, -2.0f * q0, 2.0f * q1, 0, 0, 0},
+        {2.0f * q1, 2.0f * q0, 2.0f * q3, 2.0f * q2, 0, 0, 0},
+        {2.0f * q0, -2.0f * q1, -2.0f * q2, 2.0f * q3, 0, 0, 0}};
 
-    float dev   = a_mag - 1.0f;
+    float dev = a_mag - 1.0f;
+    float dev_abs = fabsf(dev);
     float r_val = e->sigma_accel * e->sigma_accel *
                   (1.0f + e->r_adapt_k * dev * dev);
 
@@ -578,11 +625,12 @@ void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g, float dt_s
             float s = 0.0f;
             for (int k = 0; k < 7; k++)
                 s += s_HP[i][k] * H[j][k];
-            S[i][j] = s + (i==j ? r_val : 0.0f);
+            S[i][j] = s + (i == j ? r_val : 0.0f);
         }
 
     float Sinv[3][3];
-    if (!m33_inv(S, Sinv)) return;
+    if (!m33_inv(S, Sinv))
+        return;
 
     /* s_PHt = P * H^T  (7×3) — exploit H[4..6] = 0 */
     for (int i = 0; i < 7; i++)
@@ -604,28 +652,44 @@ void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g, float dt_s
             s_K[i][j] = s;
         }
 
+    /* Freeze bias update when |a| deviates too far from 1g to avoid corrupting
+     * the bias estimate during dynamic motion. Quaternion update still applies. */
+    if (dev_abs > EKF_BIAS_MAX_DEV_G)
+    {
+        for (int i = 4; i < 7; i++)
+            for (int j = 0; j < 3; j++)
+                s_K[i][j] = 0.0f;
+    }
+
     /* State update: x += K * y */
     for (int i = 0; i < 4; i++)
     {
         float dq = 0.0f;
-        for (int m = 0; m < 3; m++) dq += s_K[i][m] * y[m];
+        for (int m = 0; m < 3; m++)
+            dq += s_K[i][m] * y[m];
         e->q[i] += dq;
     }
     for (int i = 0; i < 3; i++)
     {
         float db = 0.0f;
-        for (int m = 0; m < 3; m++) db += s_K[i+4][m] * y[m];
+        for (int m = 0; m < 3; m++)
+            db += s_K[i + 4][m] * y[m];
         e->b[i] += db;
-        if      (e->b[i] >  0.05f) e->b[i] =  0.05f;
-        else if (e->b[i] < -0.05f) e->b[i] = -0.05f;
+        if (e->b[i] > 0.05f)
+            e->b[i] = 0.05f;
+        else if (e->b[i] < -0.05f)
+            e->b[i] = -0.05f;
     }
 
-    float qn = sqrtf(e->q[0]*e->q[0] + e->q[1]*e->q[1] +
-                     e->q[2]*e->q[2] + e->q[3]*e->q[3]);
+    float qn = sqrtf(e->q[0] * e->q[0] + e->q[1] * e->q[1] +
+                     e->q[2] * e->q[2] + e->q[3] * e->q[3]);
     if (qn > 1e-9f)
     {
         float qi = 1.0f / qn;
-        e->q[0]*=qi; e->q[1]*=qi; e->q[2]*=qi; e->q[3]*=qi;
+        e->q[0] *= qi;
+        e->q[1] *= qi;
+        e->q[2] *= qi;
+        e->q[3] *= qi;
     }
 
     ekf7_cov_update_joseph(e, H, r_val);
@@ -635,7 +699,7 @@ void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g, float dt_s
     if ((++s_sym_ctr & 0x3Fu) == 0u)
     {
         for (int i = 0; i < 7; i++)
-            for (int j = i+1; j < 7; j++)
+            for (int j = i + 1; j < 7; j++)
             {
                 float avg = 0.5f * (e->P[i][j] + e->P[j][i]);
                 e->P[i][j] = avg;
@@ -661,12 +725,16 @@ void ekf7_step(ekf7_t *e,
  * ----------------------------------------------------------------------- */
 void ekf7_update_mag(ekf7_t *e, float mx, float my, float mz)
 {
-    if (!e) return;
+    if (!e)
+        return;
 
-    float m_mag = sqrtf(mx*mx + my*my + mz*mz);
-    if (m_mag < 1e-9f) return;
+    float m_mag = sqrtf(mx * mx + my * my + mz * mz);
+    if (m_mag < 1e-9f)
+        return;
     float inv_m = 1.0f / m_mag;
-    mx *= inv_m; my *= inv_m; mz *= inv_m;
+    mx *= inv_m;
+    my *= inv_m;
+    mz *= inv_m;
 
     if (!e->mag_ref_valid)
     {
@@ -685,7 +753,7 @@ void ekf7_update_mag(ekf7_t *e, float mx, float my, float mz)
         return;
     }
 
-    float q0=e->q[0], q1=e->q[1], q2=e->q[2], q3=e->q[3];
+    float q0 = e->q[0], q1 = e->q[1], q2 = e->q[2], q3 = e->q[3];
     float q_now[4] = {q0, q1, q2, q3};
 
     /* Predicted mag in body frame */
@@ -693,12 +761,19 @@ void ekf7_update_mag(ekf7_t *e, float mx, float my, float mz)
     mag_predict_body_from_ref(q_now, e->mag_ref_n, h);
 
     /* Innovation */
-    float y[3] = {mx-h[0], my-h[1], mz-h[2]};
+    float y[3] = {mx - h[0], my - h[1], mz - h[2]};
 
-    /* Hard cap on large residuals — rejects demagnetisation events or
-     * field reversals near ferromagnetic objects (||y|| > 0.6 ≈ 60° error) */
-    float y_norm2 = y[0]*y[0] + y[1]*y[1] + y[2]*y[2];
-    if (y_norm2 > 0.36f) return;
+    /* Residual scaling: keep large errors from dominating while still
+     * allowing yaw recovery after high-accel divergence. */
+    float y_norm2 = y[0] * y[0] + y[1] * y[1] + y[2] * y[2];
+    float y_norm = sqrtf(y_norm2);
+    if (y_norm > EKF_MAG_RESIDUAL_MAX)
+    {
+        float s = EKF_MAG_RESIDUAL_MAX / y_norm;
+        y[0] *= s;
+        y[1] *= s;
+        y[2] *= s;
+    }
 
     /* Numeric Jacobian H (3×7) */
     float H[3][7];
@@ -707,7 +782,8 @@ void ekf7_update_mag(ekf7_t *e, float mx, float my, float mz)
     /* R for mag: convert sigma_mag [µT] to directional noise after normalization */
     float sigma_dir = e->sigma_mag / m_mag;
     float r_val = sigma_dir * sigma_dir;
-    if (r_val < 5e-3f) r_val = 5e-3f;   /* floor prevents degenerate S */
+    if (r_val < 5e-3f)
+        r_val = 5e-3f; /* floor prevents degenerate S */
 
     /* s_HP = H * P  (3×7) */
     for (int i = 0; i < 3; i++)
@@ -727,20 +803,20 @@ void ekf7_update_mag(ekf7_t *e, float mx, float my, float mz)
             float s = 0.0f;
             for (int k = 0; k < 7; k++)
                 s += s_HP[i][k] * H[j][k];
-            S[i][j] = s + (i==j ? r_val : 0.0f);
+            S[i][j] = s + (i == j ? r_val : 0.0f);
         }
 
     float Sinv[3][3];
-    if (!m33_inv(S, Sinv)) return;
+    if (!m33_inv(S, Sinv))
+        return;
 
-    /* FIX #1: NIS gate = 9.0 (was 5.0 — was rejecting ~18% of valid samples).
-     * NIS = y^T * S^-1 * y  follows chi²(3).
-     * Gate 9.0 ≈ 97th percentile: rejects genuine outliers, accepts valid data. */
+    /* Mag NIS gate (configurable) rejects extreme outliers. */
     float nis = 0.0f;
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)
             nis += y[i] * Sinv[i][j] * y[j];
-    if (nis > e->mag_nis_gate) return;
+    if (nis > e->mag_nis_gate)
+        return;
 
     /* s_PHt = P * H^T  (7×3) — H[4..6] = 0 so only cols 0..3 contribute */
     for (int i = 0; i < 7; i++)
@@ -775,25 +851,32 @@ void ekf7_update_mag(ekf7_t *e, float mx, float my, float mz)
     for (int i = 0; i < 4; i++)
     {
         float dq = 0.0f;
-        for (int m = 0; m < 3; m++) dq += s_K[i][m] * y[m];
-        if      (dq >  0.015f) dq =  0.015f;
-        else if (dq < -0.015f) dq = -0.015f;
+        for (int m = 0; m < 3; m++)
+            dq += s_K[i][m] * y[m];
+        if (dq > 0.015f)
+            dq = 0.015f;
+        else if (dq < -0.015f)
+            dq = -0.015f;
         e->q[i] += dq;
     }
     /* Bias rows were zeroed above — this loop is a no-op but kept for clarity */
     for (int i = 0; i < 3; i++)
     {
         float db = 0.0f;
-        for (int m = 0; m < 3; m++) db += s_K[i+4][m] * y[m];
+        for (int m = 0; m < 3; m++)
+            db += s_K[i + 4][m] * y[m];
         e->b[i] += db;
     }
 
-    float qn = sqrtf(e->q[0]*e->q[0] + e->q[1]*e->q[1] +
-                     e->q[2]*e->q[2] + e->q[3]*e->q[3]);
+    float qn = sqrtf(e->q[0] * e->q[0] + e->q[1] * e->q[1] +
+                     e->q[2] * e->q[2] + e->q[3] * e->q[3]);
     if (qn > 1e-9f)
     {
         float qi = 1.0f / qn;
-        e->q[0]*=qi; e->q[1]*=qi; e->q[2]*=qi; e->q[3]*=qi;
+        e->q[0] *= qi;
+        e->q[1] *= qi;
+        e->q[2] *= qi;
+        e->q[3] *= qi;
     }
 
     ekf7_cov_update_joseph(e, H, r_val);
@@ -803,7 +886,7 @@ void ekf7_update_mag(ekf7_t *e, float mx, float my, float mz)
     if ((++s_sym_ctr_mag & 0x3Fu) == 0u)
     {
         for (int i = 0; i < 7; i++)
-            for (int j = i+1; j < 7; j++)
+            for (int j = i + 1; j < 7; j++)
             {
                 float avg = 0.5f * (e->P[i][j] + e->P[j][i]);
                 e->P[i][j] = avg;
@@ -829,21 +912,29 @@ void ekf7_step_marg(ekf7_t *e,
 
 float ekf7_trace_P(const ekf7_t *e)
 {
-    if (!e) return 0.0f;
+    if (!e)
+        return 0.0f;
     float tr = 0.0f;
-    for (int i = 0; i < 7; i++) tr += e->P[i][i];
+    for (int i = 0; i < 7; i++)
+        tr += e->P[i][i];
     return tr;
 }
 
 void ekf7_get_quat(const ekf7_t *e, float q_out[4])
 {
-    if (!e || !q_out) return;
-    q_out[0]=e->q[0]; q_out[1]=e->q[1];
-    q_out[2]=e->q[2]; q_out[3]=e->q[3];
+    if (!e || !q_out)
+        return;
+    q_out[0] = e->q[0];
+    q_out[1] = e->q[1];
+    q_out[2] = e->q[2];
+    q_out[3] = e->q[3];
 }
 
 void ekf7_get_bias(const ekf7_t *e, float b_out[3])
 {
-    if (!e || !b_out) return;
-    b_out[0]=e->b[0]; b_out[1]=e->b[1]; b_out[2]=e->b[2];
+    if (!e || !b_out)
+        return;
+    b_out[0] = e->b[0];
+    b_out[1] = e->b[1];
+    b_out[2] = e->b[2];
 }

@@ -136,7 +136,7 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
 #if RUN_EKF
   ekf7_init(&s_ekf, EKF_SIGMA_GYRO, EKF_SIGMA_BIAS, EKF_SIGMA_ACCEL, EKF_SIGMA_MAG,
             EKF_R_ADAPT_K, EKF_P0);
-  /* Hard-reject window disabled — adaptive R handles dynamics gracefully */
+  /* Hard-reject window configured via EKF_ACCEL_* (adaptive R still applies) */
   ekf7_set_accel_reject(&s_ekf, EKF_ACCEL_REJECT_EN, EKF_ACCEL_MIN_G, EKF_ACCEL_MAX_G, EKF_ACCEL_TIMEOUT_S);
   s_ekf_valid = 0;
   s_ekf_aligned = 0;
@@ -403,15 +403,13 @@ void imu_app_poll(void)
 #endif
 
     // ---- optional streaming print (decimated) ----
-    // CSV format (20 fields):
+    // CSV format (15 fields):
     //  D, t_ms,
     //  ax_raw, ay_raw, az_raw, gx_raw, gy_raw, gz_raw,  (int16 sensor counts)
     //  mad_roll_mdeg, mad_pitch_mdeg, mad_yaw_mdeg,      (Madgwick output, mdeg)
     //  mad_us,                                           (Madgwick step CPU time µs)
     //  ekf_roll_mdeg, ekf_pitch_mdeg, ekf_yaw_mdeg,      (EKF output, mdeg)
-    //  traceP_1e6,                                       (EKF trace(P) * 1e6)
-    //  ekf_us,                                           (EKF step CPU time µs)
-    //  bx_uradps, by_uradps, bz_uradps                  (EKF bias µrad/s)
+    //  ekf_us                                            (EKF step CPU time µs)
     //
     // Columns are 0 when the respective filter is disabled or not yet valid.
     // The "D," prefix lets capture scripts ignore CLI chatter lines.
@@ -426,40 +424,9 @@ void imu_app_poll(void)
       int32_t ekf_r = s_ekf_valid ? (int32_t)(s_ekf_att.roll_deg * 1000.0f) : 0;
       int32_t ekf_p = s_ekf_valid ? (int32_t)(-s_ekf_att.pitch_deg * 1000.0f) : 0;
       int32_t ekf_y = s_ekf_valid ? (int32_t)(s_ekf_att.yaw_deg * 1000.0f) : 0;
-      int32_t traceP = s_ekf_valid ? (int32_t)(ekf7_trace_P(&s_ekf) * 1e6f) : 0;
-
-      float bx_f = 0.0f, by_f = 0.0f, bz_f = 0.0f;
-#if RUN_EKF
-      {
-        float b_tmp[3] = {0.0f, 0.0f, 0.0f};
-        ekf7_get_bias(&s_ekf, b_tmp);
-        bx_f = b_tmp[0];
-        by_f = b_tmp[1];
-        bz_f = b_tmp[2];
-      }
-#endif
-      int32_t bx_ur = (int32_t)(bx_f * 1e6f); // µrad/s
-      int32_t by_ur = (int32_t)(by_f * 1e6f);
-      int32_t bz_ur = (int32_t)(bz_f * 1e6f);
-
-      /* Quaternions ×1e6 — integer transport; divide by 1e6 in Python.
-       * Enables full-range ±180° pitch via atan2 in post-processing. */
-      int32_t mq0 = s_mad_valid ? (int32_t)(s_mad_att.q0 * 1e6f) : 1000000;
-      int32_t mq1 = s_mad_valid ? (int32_t)(s_mad_att.q1 * 1e6f) : 0;
-      int32_t mq2 = s_mad_valid ? (int32_t)(s_mad_att.q2 * 1e6f) : 0;
-      int32_t mq3 = s_mad_valid ? (int32_t)(s_mad_att.q3 * 1e6f) : 0;
-      int32_t eq0 = s_ekf_valid ? (int32_t)(s_ekf_att.q0 * 1e6f) : 1000000;
-      int32_t eq1 = s_ekf_valid ? (int32_t)(s_ekf_att.q1 * 1e6f) : 0;
-      int32_t eq2 = s_ekf_valid ? (int32_t)(s_ekf_att.q2 * 1e6f) : 0;
-      int32_t eq3 = s_ekf_valid ? (int32_t)(s_ekf_att.q3 * 1e6f) : 0;
-
-
       uart_cli_sendf("D,%lu,%d,%d,%d,%d,%d,%d,"
                      "%ld,%ld,%ld,%lu,"
-                     "%ld,%ld,%ld,%ld,%lu,"
-                     "%ld,%ld,%ld,"
-                     "%ld,%ld,%ld,%ld,"
-                     "%ld,%ld,%ld,%ld\r\n",
+                     "%ld,%ld,%ld,%lu\r\n",
                      /* time */
                      (unsigned long)HAL_GetTick(),
                      /* raw sensor */
@@ -470,13 +437,7 @@ void imu_app_poll(void)
                      (unsigned long)s_mad_last_us,
                      /* EKF Euler */
                      (long)ekf_r, (long)ekf_p, (long)ekf_y,
-                     (long)traceP, (unsigned long)s_ekf_last_us,
-                     /* EKF bias */
-                     (long)bx_ur, (long)by_ur, (long)bz_ur,
-                     /* Madgwick quat x1e6 */
-                     (long)mq0, (long)mq1, (long)mq2, (long)mq3,
-                     /* EKF quat x1e6 */
-                     (long)eq0, (long)eq1, (long)eq2, (long)eq3);
+                     (unsigned long)s_ekf_last_us);
     }
   }
   else

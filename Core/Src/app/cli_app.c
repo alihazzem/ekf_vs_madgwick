@@ -315,7 +315,13 @@ void app_cli_handle_line(const char *line)
 
       if (st == MPU9255_ERR_ID)
       {
+#if MPU92XX_VARIANT == MPU92XX_VARIANT_9255
+        uart_cli_send("ERR: wrong WHO_AM_I (expected MPU-9255)\r\n");
+#elif MPU92XX_VARIANT == MPU92XX_VARIANT_9250
+        uart_cli_send("ERR: wrong WHO_AM_I (expected MPU-9250)\r\n");
+#else
         uart_cli_send("ERR: wrong WHO_AM_I (not MPU-9255/9250?)\r\n");
+#endif
         return;
       }
       if (st != MPU9255_OK)
@@ -329,7 +335,9 @@ void app_cli_handle_line(const char *line)
         uart_cli_send("ERR: bypass enable failed\r\n");
         return;
       }
-      uart_cli_send("mpu init ok (MPU-9255, bypass enabled)\r\n");
+      const char *name = (cfg.whoami == MPU9255_WHOAMI_VAL) ? "MPU-9255" : (cfg.whoami == MPU9250_WHOAMI_VAL) ? "MPU-9250"
+                                                                                                              : "unknown";
+      uart_cli_sendf("mpu init ok (%s, bypass enabled)\r\n", name);
 #else
       mpu6050_status_t st = mpu6050_init_200hz(&hi2c1, MPU6050_ADDR7_DEFAULT, &cfg);
       if (st == MPU6050_ERR_ID)
@@ -643,18 +651,9 @@ void app_cli_handle_line(const char *line)
         return;
       }
 
-      // fixed-point helpers (no float printf)
-      int32_t q0 = (int32_t)(a.q0 * 1000000.0f);
-      int32_t q1 = (int32_t)(a.q1 * 1000000.0f);
-      int32_t q2 = (int32_t)(a.q2 * 1000000.0f);
-      int32_t q3 = (int32_t)(a.q3 * 1000000.0f);
-
       int32_t r = (int32_t)(a.roll_deg * 1000.0f);
       int32_t p = (int32_t)(-a.pitch_deg * 1000.0f);
       int32_t y = (int32_t)(a.yaw_deg * 1000.0f);
-
-      uart_cli_sendf("q_1e6=(%ld %ld %ld %ld)\r\n",
-                     (long)q0, (long)q1, (long)q2, (long)q3);
 
       uart_cli_sendf("rpy_mdeg=(%ld %ld %ld)\r\n",
                      (long)r, (long)p, (long)y);
@@ -701,17 +700,9 @@ void app_cli_handle_line(const char *line)
         return;
       }
 
-      int32_t q0 = (int32_t)(a.q0 * 1000000.0f);
-      int32_t q1 = (int32_t)(a.q1 * 1000000.0f);
-      int32_t q2 = (int32_t)(a.q2 * 1000000.0f);
-      int32_t q3 = (int32_t)(a.q3 * 1000000.0f);
-
       int32_t r = (int32_t)(a.roll_deg * 1000.0f);
       int32_t p = (int32_t)(-a.pitch_deg * 1000.0f);
       int32_t y = (int32_t)(a.yaw_deg * 1000.0f);
-
-      uart_cli_sendf("q_1e6=(%ld %ld %ld %ld)\r\n",
-                     (long)q0, (long)q1, (long)q2, (long)q3);
       uart_cli_sendf("rpy_mdeg=(%ld %ld %ld)\r\n",
                      (long)r, (long)p, (long)y);
       uart_cli_sendf("step_us=%lu\r\n", (unsigned long)imu_app_ekf_last_us());

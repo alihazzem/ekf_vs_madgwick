@@ -8,8 +8,14 @@
  */
 #define SENSOR_GY91 1
 
-/* ====== MPU-9255 SETTINGS (active when SENSOR_GY91 = 1) ====== */
+/* ====== MPU-92xx SETTINGS (active when SENSOR_GY91 = 1) ====== */
 #define MPU9255_ADDR_7BIT 0x68 /* SAO/SDO low → 0x68, high → 0x69 */
+
+/* Choose which MPU-92xx variant to accept at init. */
+#define MPU92XX_VARIANT_AUTO 0
+#define MPU92XX_VARIANT_9255 1
+#define MPU92XX_VARIANT_9250 2
+#define MPU92XX_VARIANT MPU92XX_VARIANT_AUTO
 
 /* ====== AK8963 SETTINGS (active when SENSOR_GY91 = 1) ====== */
 #define AK8963_ADDR_7BIT 0x0C /* Fixed address, not user-configurable */
@@ -27,13 +33,12 @@
 #define LOG_HEADER_ONCE 1
 
 /* ====== MADGWICK PARAM ====== */
-#define MADGWICK_BETA 0.5f       // final/steady-state beta (increased for better tracking)
+#define MADGWICK_BETA 1.0f       // final/steady-state beta (increased for better tracking)
 #define MADGWICK_BETA_START 0.5f // initial beta for fast convergence
 #define MADGWICK_BETA_DECAY_S \
-  2.0f                       // seconds to ramp from BETA_START down to BETA
-#define MADGWICK_ZETA 0.0f   // gyro bias gain; disabled to prevent divergence
-#define MADGWICK_BETA_MOTION_K \
-  1000.0f                         // motion-adaptive k: aggressively reduces beta during dynamic motion
+  2.0f                     // seconds to ramp from BETA_START down to BETA
+#define MADGWICK_ZETA 0.0f // gyro bias gain; disabled to prevent divergence
+#define MADGWICK_BETA_MOTION_K 5.0f  // motion-adaptive k: aggressively reduces beta during dynamic motion
 #define MADGWICK_BETA_MIN 0.0f // beta floor — allows pure gyro integration during violent motion
 
 /* ====== EKF PARAMS ======
@@ -41,27 +46,30 @@
  * values. Tune at runtime with: EKF TUNE <sigma_gyro> <sigma_bias>
  * <sigma_accel> <sigma_mag> <r_adapt_k>
  */
-#define EKF_SIGMA_GYRO 0.01f  /* gyro noise density  rad/s/sqrt(Hz)  */
-#define EKF_SIGMA_BIAS 1e-6f  /* bias random-walk    rad/s^2/sqrt(Hz) */
-#define EKF_SIGMA_ACCEL 0.05f /* accel noise density g/sqrt(Hz)       */
-#define EKF_SIGMA_MAG 8.0f    /* stability-first mag trust (slower yaw lock) */
-#define EKF_R_ADAPT_K 1000.0f   /* adaptive-R steepness: heavily down-weights lateral accelerations */
+#define EKF_SIGMA_GYRO 0.01f      /* gyro noise density  rad/s/sqrt(Hz)  */
+#define EKF_SIGMA_BIAS 1e-6f      /* bias random-walk    rad/s^2/sqrt(Hz) */
+#define EKF_SIGMA_ACCEL 0.05f     /* accel noise density g/sqrt(Hz)       */
+#define EKF_SIGMA_MAG 8.0f        /* stability-first mag trust (slower yaw lock) */
+#define EKF_R_ADAPT_K 1000.0f     /* adaptive-R steepness: heavily down-weights lateral accelerations */
+#define EKF_BIAS_MAX_DEV_G 0.15f  /* freeze bias update if |a|-1g exceeds this */
+#define EKF_MAG_NIS_GATE 20.0f    /* mag NIS gate (higher = fewer rejects) */
+#define EKF_MAG_RESIDUAL_MAX 1.5f /* max |y| before residual is scaled */
 
 #define EKF_P0                                                                \
   1.0f /* initial P diagonal  (high = uncertain at start -> fast convergence) \
         */
 
 #define EKF_ACCEL_REJECT_EN 1
-#define EKF_ACCEL_MIN_G 0.8f   /* reject if |a| < 0.8 g (free-fall / hard vibration) */
-#define EKF_ACCEL_MAX_G 1.2f   /* reject if |a| > 1.2 g (significant linear accel)   */
-#define EKF_ACCEL_TIMEOUT_S 0.0f   /* 0.0s = instant recovery when acceleration stops (no starvation) */
+#define EKF_ACCEL_MIN_G 0.3f     /* reject if |a| < 0.3 g (free-fall / sensor fault) */
+#define EKF_ACCEL_MAX_G 4.0f     /* reject if |a| > 4.0 g (impact spikes)            */
+#define EKF_ACCEL_TIMEOUT_S 0.0f /* 0.0s = instant recovery when acceleration stops (no starvation) */
 
 /* ====== MPU6050 SETTINGS ====== */
 #define MPU6050_ADDR_7BIT 0x68 // AD0=0 -> 0x68, AD0=1 -> 0x69
 
 #define MADGWICK_ACCEL_REJECT_EN 1
-#define MADGWICK_ACCEL_MIN_G 0.8f   /* reject if |a| < 0.8 g */
-#define MADGWICK_ACCEL_MAX_G 1.2f   /* reject if |a| > 1.2 g */
+#define MADGWICK_ACCEL_MIN_G 0.3f /* reject if |a| < 0.8 g */
+#define MADGWICK_ACCEL_MAX_G 4.0f /* reject if |a| > 1.2 g */
 
 /* ====== ACCELEROMETER BIAS CALIBRATION ======
  * Measured per-axis zero-g offsets in raw LSB (±2 g range, 16384 LSB/g).
@@ -73,9 +81,9 @@
  *   bias_y = mean(ay_raw)
  *   bias_z = mean(az_raw) - 16384
  */
-#define ACCEL_BIAS_X (-1300)   /* LSB, mean ax_raw when flat    */
-#define ACCEL_BIAS_Y (160)     /* LSB, mean ay_raw when flat    */
-#define ACCEL_BIAS_Z (10976)   /* LSB, mean(az_raw) - 16384     */
+#define ACCEL_BIAS_X (-1300) /* LSB, mean ax_raw when flat    */
+#define ACCEL_BIAS_Y (160)   /* LSB, mean ay_raw when flat    */
+#define ACCEL_BIAS_Z (10976) /* LSB, mean(az_raw) - 16384     */
 
 /* ====== SENSOR -> BODY AXIS REMAPPING ======
  * Derived from 3-pose calibration on the current board mounting.
