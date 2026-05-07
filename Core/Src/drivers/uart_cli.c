@@ -33,7 +33,7 @@ void uart_cli_send(const char *s) {
 }
 
 void uart_cli_sendf(const char *fmt, ...) {
-  char buf[256];
+  char buf[128];
   va_list ap;
   va_start(ap, fmt);
   vsnprintf(buf, sizeof(buf), fmt, ap);

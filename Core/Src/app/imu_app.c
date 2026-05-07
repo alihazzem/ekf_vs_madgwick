@@ -6,6 +6,8 @@
 #include "utils/math3d.h"
 #include "app/imu_types.h"
 #include "app/app_config.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #if SENSOR_GY91
 #include "drivers/mpu9255.h"
@@ -19,7 +21,6 @@
 
 static I2C_HandleTypeDef *s_hi2c = NULL;
 
-static volatile bool s_tick_due = false;
 static volatile bool s_stream_en = false;
 
 static uint32_t s_print_div = 0;
@@ -143,35 +144,20 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
 #endif
 }
 
-void imu_app_on_tick(void)
+void imu_app_add_missed(uint32_t count)
+{
+  s_missed += count;
+  s_last_miss_tick = s_tick_count; // Approximation
+}
+
+void imu_app_step(void)
 {
   s_tick_count++;
 
   if (!s_stream_en)
     return;
-
-  // If previous tick wasn't handled yet => overrun/missed tick
-  if (s_tick_due)
-  {
-    s_missed++;
-    s_last_miss_tick = s_tick_count;
-    return;
-  }
-
-  s_tick_due = true;
-}
-
-void imu_app_poll(void)
-{
-  if (!s_stream_en)
-    return;
-  if (!s_tick_due)
-    return;
   if (!s_hi2c)
     return;
-
-  // consume the tick
-  s_tick_due = false;
 
   // capture timestamp for this sample (used for dt + rate window)
   uint32_t now_cyc = timebase_cycles();
@@ -459,10 +445,6 @@ void imu_app_poll(void)
 void imu_app_stream_set(bool en)
 {
   s_stream_en = en;
-
-  // If you turn streaming off, clear pending tick to avoid counting stale work
-  if (!en)
-    s_tick_due = false;
 }
 
 bool imu_app_stream_get(void)
@@ -482,8 +464,6 @@ uint32_t imu_app_get_print_div(void)
 
 void imu_app_stats_reset(void)
 {
-  s_tick_due = false;
-
   s_tick_count = 0;
   s_sample_count = 0;
   s_missed = 0;
@@ -537,13 +517,12 @@ void imu_app_get_stats(imu_stats_t *out)
     return;
 
   // Snapshot volatile-ish state
-  __disable_irq();
+  taskENTER_CRITICAL();
   uint32_t ticks = s_tick_count;
   uint32_t samples = s_sample_count;
   uint32_t missed = s_missed;
-  bool tick_due = s_tick_due;
   bool stream_en = s_stream_en;
-  __enable_irq();
+  taskEXIT_CRITICAL();
 
   uint32_t elapsed_ms = HAL_GetTick() - s_reset_ms;
 
@@ -558,7 +537,7 @@ void imu_app_get_stats(imu_stats_t *out)
   out->missed = missed;
 
   out->stream_en = (uint8_t)(stream_en ? 1 : 0);
-  out->tick_due = (uint8_t)(tick_due ? 1 : 0);
+  out->tick_due = 0; // Not used in RTOS mode
 
   out->dt_min_us = (s_dt_min_us == 0xFFFFFFFFu) ? 0 : s_dt_min_us;
   out->dt_avg_us = dt_avg;
@@ -584,10 +563,10 @@ bool imu_app_get_madgwick(Attitude_t *out)
     return false;
 
   // Snapshot to avoid tearing if called during updates
-  __disable_irq();
+  taskENTER_CRITICAL();
   uint8_t valid = s_mad_valid;
   Attitude_t tmp = s_mad_att;
-  __enable_irq();
+  taskEXIT_CRITICAL();
 
   if (!valid)
     return false;
@@ -597,26 +576,26 @@ bool imu_app_get_madgwick(Attitude_t *out)
 
 void imu_app_madgwick_reset(void)
 {
-  __disable_irq();
+  taskENTER_CRITICAL();
   madgwick_reset(&s_mad);
   s_mad_valid = 0;
   s_mad_aligned = 0; // will re-align on next sample
-  __enable_irq();
+  taskEXIT_CRITICAL();
 }
 
 void imu_app_madgwick_set_beta(float beta)
 {
-  __disable_irq();
+  taskENTER_CRITICAL();
   madgwick_set_beta(&s_mad, beta);
-  __enable_irq();
+  taskEXIT_CRITICAL();
 }
 
 float imu_app_madgwick_get_beta(void)
 {
   float b;
-  __disable_irq();
+  taskENTER_CRITICAL();
   b = madgwick_get_beta(&s_mad);
-  __enable_irq();
+  taskEXIT_CRITICAL();
   return b;
 }
 
@@ -711,10 +690,10 @@ bool imu_app_get_ekf(Attitude_t *out)
   if (!out)
     return false;
 
-  __disable_irq();
+  taskENTER_CRITICAL();
   uint8_t valid = s_ekf_valid;
   Attitude_t tmp = s_ekf_att;
-  __enable_irq();
+  taskEXIT_CRITICAL();
 
   if (!valid)
     return false;
@@ -724,27 +703,27 @@ bool imu_app_get_ekf(Attitude_t *out)
 
 void imu_app_ekf_reset(void)
 {
-  __disable_irq();
+  taskENTER_CRITICAL();
   ekf7_reset(&s_ekf);
   s_ekf_valid = 0;
   s_ekf_aligned = 0; // will re-align from accel on next sample
-  __enable_irq();
+  taskEXIT_CRITICAL();
 }
 
 void imu_app_ekf_set_noise(float sigma_gyro, float sigma_bias,
                            float sigma_accel, float sigma_mag, float r_adapt_k)
 {
-  __disable_irq();
+  taskENTER_CRITICAL();
   ekf7_set_noise(&s_ekf, sigma_gyro, sigma_bias, sigma_accel, sigma_mag, r_adapt_k);
-  __enable_irq();
+  taskEXIT_CRITICAL();
 }
 
 float imu_app_ekf_trace_p(void)
 {
   float tr;
-  __disable_irq();
+  taskENTER_CRITICAL();
   tr = ekf7_trace_P(&s_ekf);
-  __enable_irq();
+  taskEXIT_CRITICAL();
   return tr;
 }
 
@@ -753,9 +732,9 @@ void imu_app_ekf_get_bias(float *bx, float *by, float *bz)
   if (!bx || !by || !bz)
     return;
   float b[3];
-  __disable_irq();
+  taskENTER_CRITICAL();
   ekf7_get_bias(&s_ekf, b);
-  __enable_irq();
+  taskEXIT_CRITICAL();
   *bx = b[0];
   *by = b[1];
   *bz = b[2];
@@ -774,9 +753,9 @@ void imu_app_get_mag_raw(ak8963_raw_t *out)
 {
   if (!out)
     return;
-  __disable_irq();
+  taskENTER_CRITICAL();
   *out = s_last_mag;
-  __enable_irq();
+  taskEXIT_CRITICAL();
 }
 
 void imu_app_get_ak_cfg(ak8963_cfg_t *out)
@@ -790,7 +769,7 @@ void imu_app_get_ak_cfg(ak8963_cfg_t *out)
 void imu_app_get_mag_body(float *mx_ut, float *my_ut, float *mz_ut,
                           float *norm, uint8_t *valid)
 {
-  __disable_irq();
+  taskENTER_CRITICAL();
   if (mx_ut)
     *mx_ut = s_mx_ut;
   if (my_ut)
@@ -801,14 +780,14 @@ void imu_app_get_mag_body(float *mx_ut, float *my_ut, float *mz_ut,
     *norm = s_m_norm;
   if (valid)
     *valid = s_mag_body_valid;
-  __enable_irq();
+  taskEXIT_CRITICAL();
 }
 
 /* Calibrated body-frame magnetometer getter (hard + soft iron applied). */
 void imu_app_get_mag_cal(float *mx_ut, float *my_ut, float *mz_ut,
                          float *norm, uint8_t *valid)
 {
-  __disable_irq();
+  taskENTER_CRITICAL();
   if (mx_ut)
     *mx_ut = s_mx_cal_ut;
   if (my_ut)
@@ -819,7 +798,7 @@ void imu_app_get_mag_cal(float *mx_ut, float *my_ut, float *mz_ut,
     *norm = s_m_cal_norm;
   if (valid)
     *valid = s_mag_cal_valid;
-  __enable_irq();
+  taskEXIT_CRITICAL();
 }
 
 /* Enable/disable M, line emission for offline calibration capture.
