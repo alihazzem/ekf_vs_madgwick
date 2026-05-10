@@ -16,12 +16,14 @@ BLEUUID emgCharUUIDs[4] = {
   BLEUUID("d5060405-a904-deb9-4748-2c7f4a124842")
 };
 
-BLEClient*           client    = nullptr;
+BLEClient* client    = nullptr;
 bool                 myoFound  = false;
 bool                 scanning  = false;
 BLEAdvertisedDevice* myoDevice = nullptr;
 
-volatile int8_t emgRaw[8]    = {0};
+// Use two buffers to hold the full 16-byte Myo packet
+volatile int8_t emgRaw_A[8]  = {0};
+volatile int8_t emgRaw_B[8]  = {0};
 volatile bool   newDataReady = false;
 unsigned long   lastDataTime = 0;
 
@@ -42,13 +44,13 @@ void imuCallback(BLERemoteCharacteristic* pChar, uint8_t* data, size_t length, b
 }
 
 void emgCallback(BLERemoteCharacteristic* pChar, uint8_t* data, size_t length, bool isNotify) {
-  if (!pChar->getUUID().equals(emgCharUUIDs[0])) return;
   if (length < 16) return;
 
-  for (int i = 0; i < 8; i++)
-    emgRaw[i] = (int8_t)data[i];
+  // We removed the line that ignored 3 of the 4 characteristics.
+  // Now we safely extract both Sample A and Sample B.
+  for (int i = 0; i < 8; i++) emgRaw_A[i] = (int8_t)data[i];
+  for (int i = 0; i < 8; i++) emgRaw_B[i] = (int8_t)data[i + 8];
 
-  // No DAC output — all channels are digital now
   newDataReady = true;
   lastDataTime = millis();
 }
@@ -84,7 +86,8 @@ bool connectToMyo() {
   BLERemoteCharacteristic* commandChar = controlService->getCharacteristic(COMMAND_UUID);
   if (!commandChar) return false;
 
-  uint8_t cmdEMG[] = {0x01, 0x03, 0x02, 0x01, 0x01};
+  // Swapped 0x02 to 0x03 to send RAW data to your Python filters
+  uint8_t cmdEMG[] = {0x01, 0x03, 0x03, 0x01, 0x01};
   commandChar->writeValue(cmdEMG, sizeof(cmdEMG));
 
   BLERemoteService* imuService = client->getService(IMU_SERVICE_UUID);
@@ -99,6 +102,7 @@ bool connectToMyo() {
   for (int i = 0; i < 4; i++) {
     BLERemoteCharacteristic* emgChar = emgService->getCharacteristic(emgCharUUIDs[i]);
     if (emgChar) emgChar->registerForNotify(emgCallback);
+    delay(50); // Small delay so the radio doesn't drop the subscriptions
   }
 
   lastDataTime = millis();
@@ -142,14 +146,24 @@ void loop() {
   if (newDataReady) {
     newDataReady = false;
 
-    // All 8 channels straight from BLE — CSV: CH1, CH2, CH3, CH4, CH5, CH6, CH7, CH8
-    Serial.print(emgRaw[0]);    Serial.print(",");
-    Serial.print(emgRaw[1]);    Serial.print(",");
-    Serial.print(emgRaw[2]);    Serial.print(",");
-    Serial.print(emgRaw[3]);    Serial.print(",");
-    Serial.print(emgRaw[4]);    Serial.print(",");
-    Serial.print(emgRaw[5]);    Serial.print(",");
-    Serial.print(emgRaw[6]);    Serial.print(",");
-    Serial.println(emgRaw[7]);
+    // Print Sample A
+    Serial.print(emgRaw_A[0]); Serial.print(",");
+    Serial.print(emgRaw_A[1]); Serial.print(",");
+    Serial.print(emgRaw_A[2]); Serial.print(",");
+    Serial.print(emgRaw_A[3]); Serial.print(",");
+    Serial.print(emgRaw_A[4]); Serial.print(",");
+    Serial.print(emgRaw_A[5]); Serial.print(",");
+    Serial.print(emgRaw_A[6]); Serial.print(",");
+    Serial.println(emgRaw_A[7]);
+
+    // Print Sample B
+    Serial.print(emgRaw_B[0]); Serial.print(",");
+    Serial.print(emgRaw_B[1]); Serial.print(",");
+    Serial.print(emgRaw_B[2]); Serial.print(",");
+    Serial.print(emgRaw_B[3]); Serial.print(",");
+    Serial.print(emgRaw_B[4]); Serial.print(",");
+    Serial.print(emgRaw_B[5]); Serial.print(",");
+    Serial.print(emgRaw_B[6]); Serial.print(",");
+    Serial.println(emgRaw_B[7]);
   }
 }

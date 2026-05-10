@@ -71,13 +71,7 @@
 #define configMINIMAL_STACK_SIZE                 ((uint16_t)128)
 #define configTOTAL_HEAP_SIZE                    ((size_t)16384)
 #define configMAX_TASK_NAME_LEN                  ( 16 )
-#ifdef STACK_TUNING_MODE
-    #define configUSE_TRACE_FACILITY        1
-    #define configCHECK_FOR_STACK_OVERFLOW  2
-#else
-    #define configUSE_TRACE_FACILITY        0
-    #define configCHECK_FOR_STACK_OVERFLOW  0
-#endif
+#define configUSE_TRACE_FACILITY                 1
 #define configUSE_16_BIT_TICKS                   0
 #define configUSE_MUTEXES                        1
 #define configQUEUE_REGISTRY_SIZE                8
