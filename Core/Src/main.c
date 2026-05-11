@@ -28,9 +28,12 @@
 #include "utils/timebase.h"
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #include "FreeRTOS.h"
 #include "task.h"
 #include "motor_test.h"
+#include "utils/math3d.h"
+#include "drivers/emg_uart.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -55,6 +58,8 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart2;
+UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_rx;
 
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -65,6 +70,7 @@ const osThreadAttr_t defaultTask_attributes = {
 };
 /* USER CODE BEGIN PV */
 osThreadId_t imuTaskHandle;
+osMessageQueueId_t motorCmdQueueHandle;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -74,6 +80,7 @@ static void MX_I2C1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM3_Init(void);
+static void MX_USART1_UART_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
@@ -119,11 +126,11 @@ int main(void)
   MX_TIM2_Init();
   MX_USART2_UART_Init();
   MX_TIM3_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   app_cli_print_banner();
   uart_cli_init(&huart2);
   timebase_init();
-  imu_app_init(&hi2c1);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -142,7 +149,7 @@ int main(void)
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
+  motorCmdQueueHandle = osMessageQueueNew(10, sizeof(MotorCmd_t), NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -406,6 +413,34 @@ static void MX_USART2_UART_Init(void)
 
 }
 
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 921600;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
 /**
   * @brief GPIO Initialization Function
   * @param None
@@ -426,6 +461,14 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
+  if (huart->Instance == USART1)
+  {
+    emg_uart_on_rx_event(huart, Size);
+  }
+}
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   uart_cli_on_rx_byte(huart);
@@ -448,8 +491,47 @@ static void imu_task_fn(void *arg)
 {
   (void)arg;
   uint32_t tick_count = 0;
-  HAL_TIM_Base_Start_IT(&htim2);
+  MotorCmd_t cmd;
 
+  /* --- Startup: LED on PC13 signals calibration --- */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  GPIO_InitTypeDef led = {0};
+  led.Pin   = GPIO_PIN_13;
+  led.Mode  = GPIO_MODE_OUTPUT_PP;
+  led.Pull  = GPIO_NOPULL;
+  led.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &led);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); /* active-low: ON */
+
+  imu_app_stream_set(false);
+  imu_app_init(&hi2c1);
+  imu_app_ekf_reset();
+  imu_app_madgwick_reset();
+  imu_app_cal_gyro(5000);
+  imu_app_stream_set(true);
+
+  emg_uart_init(&huart1);
+
+  /* Let EKF converge (~50 samples ≈ 250 ms at 200 Hz) */
+  HAL_TIM_Base_Start_IT(&htim2);
+  Attitude_t ekf_att;
+  for (int i = 0; i < 50; i++) {
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+    imu_app_step();
+  }
+
+  /* Capture q_ref = neutral pose */
+  float q_ref[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+  if (imu_app_get_ekf(&ekf_att)) {
+    q_ref[0] = ekf_att.q0;
+    q_ref[1] = ekf_att.q1;
+    q_ref[2] = ekf_att.q2;
+    q_ref[3] = ekf_att.q3;
+  }
+
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);   /* active-low: OFF */
+
+  /* --- Main loop: IMU-driven motor control --- */
   while (1)
   {
     uint32_t count = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -458,6 +540,60 @@ static void imu_task_fn(void *arg)
       imu_app_add_missed(count - 1);
     }
     imu_app_step();
+
+    if (imu_app_get_ekf(&ekf_att))
+    {
+      float q_ref_conj[4];
+      math3d_quat_conjugate(q_ref, q_ref_conj);
+      float q_now[4] = {ekf_att.q0, ekf_att.q1, ekf_att.q2, ekf_att.q3};
+      float q_delta[4];
+      math3d_quat_multiply(q_ref_conj, q_now, q_delta);
+
+      float pitch_val = q_delta[2];  /* Y component → speed */
+      float roll_val  = q_delta[1];  /* X component → steering */
+
+      /* ── EMG → Speed ── */
+      uint16_t   speed   = 0;
+      uint8_t    emg_raw = 0;
+      uint32_t   now_ms  = HAL_GetTick();
+
+      if (g_emg_speed_valid && (now_ms - g_emg_last_rx_ms) < EMG_SPEED_TIMEOUT_MS)
+      {
+        emg_raw = g_emg_speed;
+        speed = (uint16_t)(((uint32_t)emg_raw * 1000u) / 100u);
+      }
+
+      /* ── Pitch → Direction ── */
+      MotorDir_t dir   = DIR_STOP;
+      float abs_p = (pitch_val < 0.0f) ? -pitch_val : pitch_val;
+
+      if (abs_p >= 0.0436f) {  /* 5° deadzone */
+        dir = (pitch_val > 0.0f) ? DIR_FORWARD : DIR_BACKWARD;
+      }
+
+      if (speed == 0) {
+        dir = DIR_STOP;
+      }
+
+      /* ── Roll → Steering ── */
+      cmd.speedA = speed;
+      cmd.speedB = speed;
+      cmd.dirA   = dir;
+      cmd.dirB   = dir;
+      cmd.emg_speed = emg_raw;
+
+      if (roll_val > 0.0872f) {
+        /* Tilted right → disable right motor (B) */
+        cmd.dirB   = DIR_STOP;
+        cmd.speedB = 0;
+      } else if (roll_val < -0.0872f) {
+        /* Tilted left  → disable left motor (A) */
+        cmd.dirA   = DIR_STOP;
+        cmd.speedA = 0;
+      }
+
+      osMessageQueuePut(motorCmdQueueHandle, &cmd, 0, 0);
+    }
 
 #if STACK_TUNING_MODE
     if (++tick_count >= 1000)

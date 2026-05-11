@@ -302,6 +302,46 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
 
   }
 
+  if(huart->Instance==USART1)
+  {
+    /* Peripheral clock enable */
+    __HAL_RCC_USART1_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    /* USART1_RX GPIO: PA10 → AF7 */
+    GPIO_InitStruct.Pin       = GPIO_PIN_10;
+    GPIO_InitStruct.Mode      = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull      = GPIO_NOPULL;
+    GPIO_InitStruct.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF7_USART1;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    /* DMA init for USART1_RX: DMA2 Stream 2 Channel 4 */
+    __HAL_RCC_DMA2_CLK_ENABLE();
+
+    hdma_usart1_rx.Instance                 = DMA2_Stream2;
+    hdma_usart1_rx.Init.Channel             = DMA_CHANNEL_4;
+    hdma_usart1_rx.Init.Direction           = DMA_PERIPH_TO_MEMORY;
+    hdma_usart1_rx.Init.PeriphInc           = DMA_PINC_DISABLE;
+    hdma_usart1_rx.Init.MemInc              = DMA_MINC_ENABLE;
+    hdma_usart1_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+    hdma_usart1_rx.Init.MemDataAlignment    = DMA_MDATAALIGN_BYTE;
+    hdma_usart1_rx.Init.Mode                = DMA_NORMAL;
+    hdma_usart1_rx.Init.Priority            = DMA_PRIORITY_LOW;
+    hdma_usart1_rx.Init.FIFOMode            = DMA_FIFOMODE_DISABLE;
+    HAL_DMA_Init(&hdma_usart1_rx);
+
+    __HAL_LINKDMA(huart, hdmarx, hdma_usart1_rx);
+
+    /* NVIC for DMA */
+    HAL_NVIC_SetPriority(DMA2_Stream2_IRQn, 6, 0);
+    HAL_NVIC_EnableIRQ(DMA2_Stream2_IRQn);
+
+    /* NVIC for USART1 */
+    HAL_NVIC_SetPriority(USART1_IRQn, 6, 0);
+    HAL_NVIC_EnableIRQ(USART1_IRQn);
+  }
+
 }
 
 /**
@@ -332,6 +372,17 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* huart)
     HAL_NVIC_DisableIRQ(USART2_IRQn);
 
     /* USER CODE END USART2_MspDeInit 1 */
+  }
+
+  if(huart->Instance==USART1)
+  {
+    __HAL_RCC_USART1_CLK_DISABLE();
+
+    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_10);
+
+    HAL_DMA_DeInit(huart->hdmarx);
+    HAL_NVIC_DisableIRQ(USART1_IRQn);
+    HAL_NVIC_DisableIRQ(DMA2_Stream2_IRQn);
   }
 
 }

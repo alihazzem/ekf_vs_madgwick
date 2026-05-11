@@ -155,4 +155,7 @@
 #define MAG_CAL_S32 -0.0243f
 #define MAG_CAL_S33 0.9704f
 
+/* ====== EMG MOTOR FUSION ====== */
+#define EMG_SPEED_TIMEOUT_MS 500  /* stop motors if no valid EMG packet for 500 ms */
+
 #endif // APP_CONFIG_H

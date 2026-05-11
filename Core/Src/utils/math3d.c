@@ -67,3 +67,23 @@ void math3d_quat_to_euler_deg(float q0, float q1, float q2, float q3,
   if (pitch_deg) *pitch_deg = pitch * RAD2DEG;
   if (yaw_deg)   *yaw_deg   = yaw   * RAD2DEG;
 }
+
+void math3d_quat_multiply(const float qa[4], const float qb[4], float q_out[4])
+{
+  float w = qa[0]*qb[0] - qa[1]*qb[1] - qa[2]*qb[2] - qa[3]*qb[3];
+  float x = qa[0]*qb[1] + qa[1]*qb[0] + qa[2]*qb[3] - qa[3]*qb[2];
+  float y = qa[0]*qb[2] - qa[1]*qb[3] + qa[2]*qb[0] + qa[3]*qb[1];
+  float z = qa[0]*qb[3] + qa[1]*qb[2] - qa[2]*qb[1] + qa[3]*qb[0];
+  q_out[0] = w;
+  q_out[1] = x;
+  q_out[2] = y;
+  q_out[3] = z;
+}
+
+void math3d_quat_conjugate(const float q[4], float q_out[4])
+{
+  q_out[0] =  q[0];
+  q_out[1] = -q[1];
+  q_out[2] = -q[2];
+  q_out[3] = -q[3];
+}

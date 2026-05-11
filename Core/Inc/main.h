@@ -56,6 +56,9 @@ void Error_Handler(void);
 
 /* USER CODE END EFP */
 
+extern UART_HandleTypeDef huart1;
+extern DMA_HandleTypeDef hdma_usart1_rx;
+
 /* Private defines -----------------------------------------------------------*/
 
 /* USER CODE BEGIN Private defines */
