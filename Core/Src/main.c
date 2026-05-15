@@ -296,7 +296,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 8399;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 99;
+  htim2.Init.Period = 49;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -469,6 +469,14 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
   }
 }
 
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
+  {
+    emg_uart_recover();
+  }
+}
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   uart_cli_on_rx_byte(huart);
@@ -560,7 +568,12 @@ static void imu_task_fn(void *arg)
       if (g_emg_speed_valid && (now_ms - g_emg_last_rx_ms) < EMG_SPEED_TIMEOUT_MS)
       {
         emg_raw = g_emg_speed;
-        speed = (uint16_t)(((uint32_t)emg_raw * 1000u) / 100u);
+        speed = (uint16_t)(((uint32_t)emg_raw * 999u) / 100u);
+      }
+
+      if (!g_emg_speed_valid && (now_ms - g_emg_last_rx_ms) >= 3000)
+      {
+        emg_uart_recover();
       }
 
       /* ── Pitch → Direction ── */

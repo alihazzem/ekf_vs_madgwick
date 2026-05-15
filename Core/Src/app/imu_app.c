@@ -8,6 +8,7 @@
 #include "app/app_config.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
 
 #if SENSOR_GY91
 #include "drivers/mpu9255.h"
@@ -20,6 +21,8 @@
 #include <math.h> /* sqrtf for mag norm */
 
 static I2C_HandleTypeDef *s_hi2c = NULL;
+
+SemaphoreHandle_t g_i2c_mutex = NULL;
 
 static volatile bool s_stream_en = false;
 
@@ -96,6 +99,11 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
   s_hi2c = hi2c;
   imu_app_stats_reset();
 
+  if (g_i2c_mutex == NULL)
+  {
+    g_i2c_mutex = xSemaphoreCreateMutex();
+  }
+
 #if SENSOR_GY91
   /* ---- GY-91: MPU-9255 + AK8963 bring-up ---- */
   {
@@ -168,14 +176,18 @@ void imu_app_step(void)
 
   // read IMU (accel + gyro)
 #if SENSOR_GY91
+  xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
   if (mpu9255_read_raw(s_hi2c, MPU9255_ADDR_7BIT, &s_last) == MPU9255_OK)
   {
     /* Best-effort AK8963 read — if DRDY=0, s_last_mag.valid stays 0
      * and the previous sample is preserved unchanged.              */
     ak8963_read_raw(s_hi2c, &s_last_mag);
+    xSemaphoreGive(g_i2c_mutex);
 #else
+  xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
   if (mpu6050_read_raw(s_hi2c, MPU6050_ADDR_7BIT, &s_last) == MPU6050_OK)
   {
+    xSemaphoreGive(g_i2c_mutex);
 #endif /* SENSOR_GY91 */
 
     // ---- compute dt (seconds) from last successful sample ----
@@ -429,8 +441,10 @@ void imu_app_step(void)
   else
   {
 #if SENSOR_GY91
+    xSemaphoreGive(g_i2c_mutex);
     uart_cli_send("mpu9255 read error\r\n");
 #else
+    xSemaphoreGive(g_i2c_mutex);
     uart_cli_send("mpu read error\r\n");
 #endif
   }
@@ -638,6 +652,7 @@ bool imu_app_cal_gyro(uint32_t duration_ms)
   mpu9255_raw_t r;
   while ((HAL_GetTick() - start) < duration_ms)
   {
+    xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
     if (mpu9255_read_raw(s_hi2c, MPU9255_ADDR_7BIT, &r) == MPU9255_OK)
     {
       sum_x += r.gx;
@@ -645,12 +660,14 @@ bool imu_app_cal_gyro(uint32_t duration_ms)
       sum_z += r.gz;
       count++;
     }
+    xSemaphoreGive(g_i2c_mutex);
     HAL_Delay(2);
   }
 #else
   mpu6050_raw_t r;
   while ((HAL_GetTick() - start) < duration_ms)
   {
+    xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
     if (mpu6050_read_raw(s_hi2c, MPU6050_ADDR_7BIT, &r) == MPU6050_OK)
     {
       sum_x += r.gx;
@@ -658,6 +675,7 @@ bool imu_app_cal_gyro(uint32_t duration_ms)
       sum_z += r.gz;
       count++;
     }
+    xSemaphoreGive(g_i2c_mutex);
     HAL_Delay(2); // small delay (~500 Hz max read)
   }
 #endif /* SENSOR_GY91 */

@@ -12,6 +12,7 @@ extern volatile uint32_t g_emg_last_rx_ms;
 
 void emg_uart_init(UART_HandleTypeDef *huart);
 void emg_uart_on_rx_event(UART_HandleTypeDef *huart, uint16_t size);
+void emg_uart_recover(void);
 
 #ifdef __cplusplus
 }

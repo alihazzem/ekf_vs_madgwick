@@ -46,8 +46,8 @@
  * values. Tune at runtime with: EKF TUNE <sigma_gyro> <sigma_bias>
  * <sigma_accel> <sigma_mag> <r_adapt_k>
  */
-#define EKF_SIGMA_GYRO 0.01f      /* gyro noise density  rad/s/sqrt(Hz)  */
-#define EKF_SIGMA_BIAS 1e-6f      /* bias random-walk    rad/s^2/sqrt(Hz) */
+#define EKF_SIGMA_GYRO 0.002f      /* gyro noise density  rad/s/sqrt(Hz)  */
+#define EKF_SIGMA_BIAS 6.3e-5f      /* bias random-walk    rad/s^2/sqrt(Hz) */
 #define EKF_SIGMA_ACCEL 0.05f     /* accel noise density g/sqrt(Hz)       */
 #define EKF_SIGMA_MAG 8.0f        /* stability-first mag trust (slower yaw lock) */
 #define EKF_R_ADAPT_K 1000.0f     /* adaptive-R steepness: heavily down-weights lateral accelerations */
@@ -94,21 +94,17 @@
  *  Outputs : ax_g, ay_g, az_g  — body-frame  accel   (g)
  *            wx,   wy,   wz    — body-frame  gyro    (rad/s)
  *
- * Default mapping (no remap):
- *   ax_g = +ax_s
- *   ay_g = +ay_s
- *   az_g = +az_s
- *   wx   = +wx_s
- *   wy   = +wy_s
- *   wz   = +wz_s
+/* ====== ACCEL/GYRO → BODY AXIS REMAP ======
+ * Orientation: 180-degree rotation around Roll (X-axis).
+ * X remains unchanged. Y and Z are inverted.
  */
 #define REMAP_AX_G(ax_s, ay_s, az_s) ((ax_s))
-#define REMAP_AY_G(ax_s, ay_s, az_s) ((ay_s))
-#define REMAP_AZ_G(ax_s, ay_s, az_s) ((az_s))
+#define REMAP_AY_G(ax_s, ay_s, az_s) (-(ay_s))
+#define REMAP_AZ_G(ax_s, ay_s, az_s) (-(az_s))
 
 #define REMAP_WX(wx_s, wy_s, wz_s) ((wx_s))
-#define REMAP_WY(wx_s, wy_s, wz_s) ((wy_s))
-#define REMAP_WZ(wx_s, wy_s, wz_s) ((wz_s))
+#define REMAP_WY(wx_s, wy_s, wz_s) (-(wy_s))
+#define REMAP_WZ(wx_s, wy_s, wz_s) (-(wz_s))
 
 /* ====== AK8963 → BODY AXIS REMAP (active when SENSOR_GY91 = 1) ======
  * The AK8963 die inside the MPU-9255 is physically mounted at a different
@@ -118,16 +114,14 @@
  *   AK8963 +Y  ≡  accel/gyro +X   (swap X↔Y)
  *   AK8963 +Z  ≡  accel/gyro -Z   (negate Z)
  *
- * These macros map raw AK8963 sensor-frame counts into the body frame that
- * is consistent with the accel/gyro remap above.  Edit ONLY these three
- * macros if the board is mounted differently.
- *
- * Inputs : mx_s, my_s, mz_s — AK8963 sensor-frame raw 16-bit counts
- * Output : body-frame counts (before ASA correction and µT scaling)
+ * Applying the 180-degree roll rotation (invert Y and Z) to the base mapping:
+ *   New Body X = Base Body X  = +(my_s)
+ *   New Body Y = -Base Body Y = -(mx_s)
+ *   New Body Z = -Base Body Z = -(-mz_s) = +(mz_s)
  */
 #define REMAP_MX(mx_s, my_s, mz_s) (+(my_s))
-#define REMAP_MY(mx_s, my_s, mz_s) (+(mx_s))
-#define REMAP_MZ(mx_s, my_s, mz_s) (-(mz_s))
+#define REMAP_MY(mx_s, my_s, mz_s) (-(mx_s))
+#define REMAP_MZ(mx_s, my_s, mz_s) (+(mz_s))
 
 /* Scale factor: 0.15 µT per LSB in 16-bit mode (AK8963 datasheet Table 3) */
 #define AK8963_UT_PER_LSB 0.15f

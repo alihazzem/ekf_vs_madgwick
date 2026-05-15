@@ -6,6 +6,9 @@
 #include "app/imu_app.h"
 #include "app/app_config.h"
 
+#include "FreeRTOS.h"
+#include "semphr.h"
+
 #if SENSOR_GY91
 #include "drivers/mpu9255.h"
 #include "drivers/ak8963.h"
@@ -175,7 +178,9 @@ void app_cli_handle_line(const char *line)
       uint8_t found[16];
       size_t cnt = 0;
 
+      xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
       i2c_scan(&hi2c1, found, 16, &cnt);
+      xSemaphoreGive(g_i2c_mutex);
 
       uart_cli_sendf("found=%lu\r\n", (unsigned long)cnt);
 
@@ -208,22 +213,28 @@ void app_cli_handle_line(const char *line)
     {
 #if SENSOR_GY91
       uint8_t id = 0;
+      xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
       if (mpu9255_whoami(&hi2c1, MPU9255_ADDR_7BIT, &id) != MPU9255_OK)
       {
+        xSemaphoreGive(g_i2c_mutex);
         uart_cli_send("ERR: whoami\r\n");
         return;
       }
+      xSemaphoreGive(g_i2c_mutex);
       uart_cli_sendf("MPU addr=0x%02X WHO_AM_I=0x%02X (%s)\r\n",
                      MPU9255_ADDR_7BIT, id,
                      (id == MPU9255_WHOAMI_VAL) ? "MPU-9255" : (id == MPU9250_WHOAMI_VAL) ? "MPU-9250"
                                                                                           : "unknown");
 #else
       uint8_t id = 0;
+      xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
       if (mpu6050_whoami(&hi2c1, MPU6050_ADDR7_DEFAULT, &id) != MPU6050_OK)
       {
+        xSemaphoreGive(g_i2c_mutex);
         uart_cli_send("ERR: whoami\r\n");
         return;
       }
+      xSemaphoreGive(g_i2c_mutex);
       uart_cli_sendf("MPU addr=0x%02X WHO_AM_I=0x%02X\r\n", MPU6050_ADDR7_DEFAULT, id);
 #endif
       return;
@@ -233,10 +244,12 @@ void app_cli_handle_line(const char *line)
     {
 #if SENSOR_GY91
       mpu9255_cfg_t cfg;
+      xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
       mpu9255_status_t st = mpu9255_init_200hz(&hi2c1, MPU9255_ADDR_7BIT, &cfg);
 
       if (st == MPU9255_ERR_ID)
       {
+        xSemaphoreGive(g_i2c_mutex);
 #if MPU92XX_VARIANT == MPU92XX_VARIANT_9255
         uart_cli_send("ERR: wrong WHO_AM_I (expected MPU-9255)\r\n");
 #elif MPU92XX_VARIANT == MPU92XX_VARIANT_9250
@@ -248,30 +261,37 @@ void app_cli_handle_line(const char *line)
       }
       if (st != MPU9255_OK)
       {
+        xSemaphoreGive(g_i2c_mutex);
         uart_cli_send("ERR: mpu9255 init failed\r\n");
         return;
       }
       /* Enable bypass to expose AK8963 on the I2C bus */
       if (mpu9255_enable_bypass(&hi2c1, MPU9255_ADDR_7BIT) != MPU9255_OK)
       {
+        xSemaphoreGive(g_i2c_mutex);
         uart_cli_send("ERR: bypass enable failed\r\n");
         return;
       }
+      xSemaphoreGive(g_i2c_mutex);
       const char *name = (cfg.whoami == MPU9255_WHOAMI_VAL) ? "MPU-9255" : (cfg.whoami == MPU9250_WHOAMI_VAL) ? "MPU-9250"
-                                                                                                              : "unknown";
+                                                                                                               : "unknown";
       uart_cli_sendf("mpu init ok (%s, bypass enabled)\r\n", name);
 #else
+      xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
       mpu6050_status_t st = mpu6050_init_200hz(&hi2c1, MPU6050_ADDR7_DEFAULT, &cfg);
       if (st == MPU6050_ERR_ID)
       {
+        xSemaphoreGive(g_i2c_mutex);
         uart_cli_send("ERR: wrong WHO_AM_I (not MPU6050?)\r\n");
         return;
       }
       if (st != MPU6050_OK)
       {
+        xSemaphoreGive(g_i2c_mutex);
         uart_cli_send("ERR: init failed\r\n");
         return;
       }
+      xSemaphoreGive(g_i2c_mutex);
       uart_cli_send("mpu init ok\r\n");
 #endif
       return;

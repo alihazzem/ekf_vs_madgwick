@@ -6,6 +6,18 @@ static i2c_reg_status_t map_status(HAL_StatusTypeDef st) {
   return I2C_REG_ERROR;
 }
 
+void i2c_recover_bus(I2C_HandleTypeDef *hi2c)
+{
+  if (!hi2c) return;
+
+  if (hi2c->State != HAL_I2C_STATE_READY)
+  {
+    hi2c->State = HAL_I2C_STATE_READY;
+    hi2c->Lock  = HAL_UNLOCKED;
+    hi2c->ErrorCode = HAL_I2C_ERROR_NONE;
+  }
+}
+
 i2c_reg_status_t i2c_scan(I2C_HandleTypeDef *hi2c, uint8_t *found, size_t max_found, size_t *out_count)
 {
   if (!hi2c || !found || !out_count) return I2C_REG_ERROR;
@@ -26,6 +38,8 @@ i2c_reg_status_t i2c_read_reg(I2C_HandleTypeDef *hi2c, uint8_t addr7, uint8_t re
 {
   if (!hi2c || !buf || len == 0) return I2C_REG_ERROR;
 
+  i2c_recover_bus(hi2c);
+
   uint16_t addr8 = (uint16_t)(addr7 << 1);
 
   HAL_StatusTypeDef st =
@@ -37,24 +51,36 @@ i2c_reg_status_t i2c_read_reg(I2C_HandleTypeDef *hi2c, uint8_t addr7, uint8_t re
                        (uint16_t)len,
                        timeout_ms);
 
+  if (st != HAL_OK)
+  {
+    i2c_recover_bus(hi2c);
+  }
+
   return map_status(st);
 }
 
 i2c_reg_status_t i2c_write_reg(I2C_HandleTypeDef *hi2c, uint8_t addr7, uint8_t reg,
-                               uint8_t val, uint32_t timeout_ms)
+                                uint8_t val, uint32_t timeout_ms)
 {
   if (!hi2c) return I2C_REG_ERROR;
+
+  i2c_recover_bus(hi2c);
 
   uint16_t addr8 = (uint16_t)(addr7 << 1);
 
   HAL_StatusTypeDef st =
       HAL_I2C_Mem_Write(hi2c,
-                        addr8,
-                        reg,
-                        I2C_MEMADD_SIZE_8BIT,
-                        &val,
-                        1,
-                        timeout_ms);
+                         addr8,
+                         reg,
+                         I2C_MEMADD_SIZE_8BIT,
+                         &val,
+                         1,
+                         timeout_ms);
+
+  if (st != HAL_OK)
+  {
+    i2c_recover_bus(hi2c);
+  }
 
   return map_status(st);
 }

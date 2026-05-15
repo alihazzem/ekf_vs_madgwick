@@ -6,6 +6,8 @@
 #include "stm32f4xx_hal.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include "FreeRTOS.h"
+#include "semphr.h"
 
 #if SENSOR_GY91
 #include "drivers/ak8963.h"
@@ -14,6 +16,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+extern SemaphoreHandle_t g_i2c_mutex;
 
 typedef struct
 {

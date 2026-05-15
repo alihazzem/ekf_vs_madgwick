@@ -23,3 +23,5 @@ i2c_reg_status_t i2c_read_reg(I2C_HandleTypeDef *hi2c, uint8_t addr7, uint8_t re
 
 i2c_reg_status_t i2c_write_reg(I2C_HandleTypeDef *hi2c, uint8_t addr7, uint8_t reg,
                                uint8_t val, uint32_t timeout_ms);
+
+void i2c_recover_bus(I2C_HandleTypeDef *hi2c);
