@@ -22,18 +22,20 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "drivers/uart_cli.h"
+#include "FreeRTOS.h"
 #include "app/cli_app.h"
 #include "app/imu_app.h"
-#include "utils/timebase.h"
-#include <string.h>
-#include <stdio.h>
-#include <math.h>
-#include "FreeRTOS.h"
+#include "drivers/uart_cli.h"
 #include "task.h"
-#include "motor_test.h"
-#include "utils/math3d.h"
+#include "utils/timebase.h"
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+// #include "motor_test.h"
 #include "drivers/emg_uart.h"
+#include "utils/math3d.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -64,13 +66,13 @@ DMA_HandleTypeDef hdma_usart1_rx;
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
-  .name = "defaultTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+    .name = "defaultTask",
+    .stack_size = 128 * 4,
+    .priority = (osPriority_t)osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
 osThreadId_t imuTaskHandle;
-osMessageQueueId_t motorCmdQueueHandle;
+// osMessageQueueId_t motorCmdQueueHandle;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -94,11 +96,10 @@ static void cli_task_fn(void *arg);
 /* USER CODE END 0 */
 
 /**
-  * @brief  The application entry point.
-  * @retval int
-  */
-int main(void)
-{
+ * @brief  The application entry point.
+ * @retval int
+ */
+int main(void) {
 
   /* USER CODE BEGIN 1 */
 
@@ -106,7 +107,8 @@ int main(void)
 
   /* MCU Configuration--------------------------------------------------------*/
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick.
+   */
   HAL_Init();
 
   /* USER CODE BEGIN Init */
@@ -149,31 +151,30 @@ int main(void)
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  motorCmdQueueHandle = osMessageQueueNew(10, sizeof(MotorCmd_t), NULL);
+  // motorCmdQueueHandle = osMessageQueueNew(10, sizeof(MotorCmd_t), NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  defaultTaskHandle =
+      osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  imuTaskHandle = osThreadNew(imu_task_fn, NULL, &(osThreadAttr_t){
-      .name       = "IMU",
-      .priority   = osPriorityRealtime,
-      .stack_size = 512 * 4
-  });
+  imuTaskHandle = osThreadNew(imu_task_fn, NULL,
+                              &(osThreadAttr_t){.name = "IMU",
+                                                .priority = osPriorityRealtime,
+                                                .stack_size = 512 * 4});
 
-  osThreadNew(cli_task_fn, NULL, &(osThreadAttr_t){
-      .name       = "CLI",
-      .priority   = osPriorityLow,
-      .stack_size = 512 * 4
-  });
+  osThreadNew(cli_task_fn, NULL,
+              &(osThreadAttr_t){.name = "CLI",
+                                .priority = osPriorityLow,
+                                .stack_size = 512 * 4});
 
-  osThreadNew(motor_test_task_fn, NULL, &(osThreadAttr_t){
-      .name       = "MotorTest",
-      .priority   = osPriorityNormal,
-      .stack_size = 256 * 4
-  });
+  // osThreadNew(motor_test_task_fn, NULL, &(osThreadAttr_t){
+  //     .name       = "MotorTest",
+  //     .priority   = osPriorityNormal,
+  //     .stack_size = 256 * 4
+  // });
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -187,8 +188,7 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+  while (1) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -197,22 +197,21 @@ int main(void)
 }
 
 /**
-  * @brief System Clock Configuration
-  * @retval None
-  */
-void SystemClock_Config(void)
-{
+ * @brief System Clock Configuration
+ * @retval None
+ */
+void SystemClock_Config(void) {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Configure the main internal regulator output voltage
-  */
+   */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
+   * in the RCC_OscInitTypeDef structure.
+   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
@@ -221,33 +220,30 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLN = 336;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
   RCC_OscInitStruct.PLL.PLLQ = 4;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
     Error_Handler();
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+   */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
+                                RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-  {
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
     Error_Handler();
   }
 }
 
 /**
-  * @brief I2C1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2C1_Init(void)
-{
+ * @brief I2C1 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_I2C1_Init(void) {
 
   /* USER CODE BEGIN I2C1_Init 0 */
 
@@ -265,23 +261,20 @@ static void MX_I2C1_Init(void)
   hi2c1.Init.OwnAddress2 = 0;
   hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-  {
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN I2C1_Init 2 */
 
   /* USER CODE END I2C1_Init 2 */
-
 }
 
 /**
-  * @brief TIM2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM2_Init(void)
-{
+ * @brief TIM2 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM2_Init(void) {
 
   /* USER CODE BEGIN TIM2_Init 0 */
 
@@ -299,34 +292,29 @@ static void MX_TIM2_Init(void)
   htim2.Init.Period = 49;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
-  {
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK) {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-  {
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK) {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM2_Init 2 */
 
   /* USER CODE END TIM2_Init 2 */
-
 }
 
 /**
-  * @brief TIM3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM3_Init(void)
-{
+ * @brief TIM3 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM3_Init(void) {
 
   /* USER CODE BEGIN TIM3_Init 0 */
 
@@ -342,22 +330,19 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 83;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 999;
+  htim3.Init.Period = 19999;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK) {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
-  {
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK) {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
-  {
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK) {
     Error_Handler();
   }
 
@@ -365,28 +350,24 @@ static void MX_TIM3_Init(void)
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  
-  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
+
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM3_Init 2 */
 
   /* USER CODE END TIM3_Init 2 */
-
 }
 
 /**
-  * @brief USART2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART2_UART_Init(void)
-{
+ * @brief USART2 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_USART2_UART_Init(void) {
 
   /* USER CODE BEGIN USART2_Init 0 */
 
@@ -403,18 +384,15 @@ static void MX_USART2_UART_Init(void)
   huart2.Init.Mode = UART_MODE_TX_RX;
   huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
-  {
+  if (HAL_UART_Init(&huart2) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN USART2_Init 2 */
 
   /* USER CODE END USART2_Init 2 */
-
 }
 
-static void MX_USART1_UART_Init(void)
-{
+static void MX_USART1_UART_Init(void) {
 
   /* USER CODE BEGIN USART1_Init 0 */
 
@@ -431,23 +409,20 @@ static void MX_USART1_UART_Init(void)
   huart1.Init.Mode = UART_MODE_RX;
   huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
+  if (HAL_UART_Init(&huart1) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
-
 }
 
 /**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
+ * @brief GPIO Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_GPIO_Init(void) {
   /* USER CODE BEGIN MX_GPIO_Init_1 */
   /* USER CODE END MX_GPIO_Init_1 */
 
@@ -461,29 +436,23 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
-{
-  if (huart->Instance == USART1)
-  {
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
+  if (huart->Instance == USART1) {
     emg_uart_on_rx_event(huart, Size);
   }
 }
 
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-  if (huart->Instance == USART1)
-  {
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
+  if (huart->Instance == USART1) {
     emg_uart_recover();
   }
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
   uart_cli_on_rx_byte(huart);
 }
 
-void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
-{
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) {
   (void)xTask;
   (void)pcTaskName;
   __BKPT(0);
@@ -495,27 +464,42 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 static volatile UBaseType_t s_imu_hwm = 0;
 #endif
 
-static void imu_task_fn(void *arg)
-{
+static void imu_task_fn(void *arg) {
   (void)arg;
   uint32_t tick_count = 0;
-  MotorCmd_t cmd;
+  (void)tick_count;
+  // MotorCmd_t cmd;
 
   /* --- Startup: LED on PC13 signals calibration --- */
   __HAL_RCC_GPIOC_CLK_ENABLE();
   GPIO_InitTypeDef led = {0};
-  led.Pin   = GPIO_PIN_13;
-  led.Mode  = GPIO_MODE_OUTPUT_PP;
-  led.Pull  = GPIO_NOPULL;
+  led.Pin = GPIO_PIN_13;
+  led.Mode = GPIO_MODE_OUTPUT_PP;
+  led.Pull = GPIO_NOPULL;
   led.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &led);
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); /* active-low: ON */
 
+  /* --- Safety Delay ---
+   * Wait 2 seconds before sending power to the servos,
+   * giving you time to move your hands clear after plugging in the battery.
+   */
+  osDelay(pdMS_TO_TICKS(2000));
+
+  /* --- Init Servos to Safe Lock Position during calibration --- */
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1,
+                        1500); // Pitch Servo: 90 degrees (Center)
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2,
+                        500); // Roll Servo: Maximum lower limit
+
+  /* --- Now begin the lengthy IMU initialization and calibration --- */
   imu_app_stream_set(false);
   imu_app_init(&hi2c1);
   imu_app_ekf_reset();
   imu_app_madgwick_reset();
-  imu_app_cal_gyro(5000);
+  imu_app_cal_gyro(4000);
   imu_app_stream_set(true);
 
   emg_uart_init(&huart1);
@@ -537,29 +521,79 @@ static void imu_task_fn(void *arg)
     q_ref[3] = ekf_att.q3;
   }
 
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);   /* active-low: OFF */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); /* active-low: OFF */
+
+  /* Variables for servo smoothing (Exponential Moving Average)
+   * Initialized to exactly match the locked startup positions above!
+   */
+  float smoothed_pitch = 1500.0f;
+  float smoothed_roll = 500.0f;
+  /*
+   * Tuning factor between 0.0 and 1.0.
+   * 1.0 = Instant (Raw IMU speed)
+   * 0.02 = Very smooth/slow (approx 0.25 seconds delay at 200Hz)
+   * Change this to make it faster or slower!
+   */
+  const float SERVO_SMOOTHING = 0.02f;
 
   /* --- Main loop: IMU-driven motor control --- */
-  while (1)
-  {
+  while (1) {
     uint32_t count = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    if (count > 1)
-    {
+    if (count > 1) {
       imu_app_add_missed(count - 1);
     }
     imu_app_step();
 
-    if (imu_app_get_ekf(&ekf_att))
-    {
-      float q_ref_conj[4];
-      math3d_quat_conjugate(q_ref, q_ref_conj);
+    if (imu_app_get_ekf(&ekf_att)) {
       float q_now[4] = {ekf_att.q0, ekf_att.q1, ekf_att.q2, ekf_att.q3};
-      float q_delta[4];
-      math3d_quat_multiply(q_ref_conj, q_now, q_delta);
 
-      float pitch_val = q_delta[2];  /* Y component → speed */
-      float roll_val  = q_delta[1];  /* X component → steering */
+      /* Use absolute orientation directly instead of relative (q_delta) */
+      float roll_deg, pitch_deg, yaw_deg;
+      math3d_quat_to_euler_deg(q_now[0], q_now[1], q_now[2], q_now[3],
+                               &roll_deg, &pitch_deg, &yaw_deg);
 
+      /*
+       * SERVO 1 (Pitch): 180-degree servo
+       * Range: 500us (0 deg) to 2500us (180 deg) => 11.11 us/deg
+       * Center: 1500us (90 deg)
+       * We want a max of 60 degrees total use (+/- 30 degrees from center)
+       */
+      float pitch_servo_us = 1500.0f + (pitch_deg * (2000.0f / 180.0f));
+
+      /* Constrain Pitch to +/- 30 degrees from center (1167us to 1833us)
+       * This strictly enforces the mechanical limit so the servo never moves
+       * beyond it!
+       */
+      uint32_t ccr_pitch =
+          (uint32_t)fmaxf(1167.0f, fminf(1833.0f, pitch_servo_us));
+
+      /*
+       * SERVO 2 (Roll): 
+       * Assuming standard 180-degree physical sweep mapping for the servo.
+       * Range: 500us (-90 deg) to 2500us (+90 deg) => 11.11 us/deg
+       * Center: 1500us (0 deg)
+       * We want a max of 180 degrees total use (+/- 90 degrees from center)
+       */
+      float roll_servo_us = 1500.0f + (roll_deg * (2000.0f / 180.0f));
+
+      /* Constrain Roll to +/- 90 degrees from center (500us to 2500us)
+       * This strictly enforces the mechanical limit so the servo never moves
+       * beyond it!
+       */
+      uint32_t ccr_roll =
+          (uint32_t)fmaxf(500.0f, fminf(2500.0f, roll_servo_us));
+
+      /* Apply Exponential Smoothing Filter */
+      smoothed_pitch = (smoothed_pitch * (1.0f - SERVO_SMOOTHING)) +
+                       ((float)ccr_pitch * SERVO_SMOOTHING);
+      smoothed_roll = (smoothed_roll * (1.0f - SERVO_SMOOTHING)) +
+                      ((float)ccr_roll * SERVO_SMOOTHING);
+
+      /* IMU control is now active using absolute orientation */
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)smoothed_pitch);
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, (uint32_t)smoothed_roll);
+
+#if 0
       /* ── EMG → Speed ── */
       uint16_t   speed   = 0;
       uint8_t    emg_raw = 0;
@@ -606,44 +640,42 @@ static void imu_task_fn(void *arg)
       }
 
       osMessageQueuePut(motorCmdQueueHandle, &cmd, 0, 0);
+#endif
     }
 
 #if STACK_TUNING_MODE
-    if (++tick_count >= 1000)
-    {
-        tick_count = 0;
-        s_imu_hwm = uxTaskGetStackHighWaterMark(NULL);
+    if (++tick_count >= 1000) {
+      tick_count = 0;
+      s_imu_hwm = uxTaskGetStackHighWaterMark(NULL);
     }
 #endif
 
 #ifdef DEBUG
     UBaseType_t hwm = uxTaskGetStackHighWaterMark(NULL);
-    if (hwm < 100)
-    {
-        __BKPT(0);
+    if (hwm < 100) {
+      __BKPT(0);
     }
 #endif
   }
 }
 
-static void cli_task_fn(void *arg)
-{
+static void cli_task_fn(void *arg) {
   (void)arg;
   uint32_t tick_count = 0;
-  while (1)
-  {
+  (void)tick_count;
+  while (1) {
     uart_cli_poll();
     osDelay(5);
 
 #if STACK_TUNING_MODE
-    if (++tick_count >= 200)
-    {
-        tick_count = 0;
-        UBaseType_t hwm = uxTaskGetStackHighWaterMark(NULL);
-        char buf[128];
-        snprintf(buf, sizeof(buf), "[CLI] HWM: %lu words  |  [IMU] HWM: %lu words\r\n", 
-                 (unsigned long)hwm, (unsigned long)s_imu_hwm);
-        HAL_UART_Transmit(&huart2, (uint8_t*)buf, strlen(buf), 100);
+    if (++tick_count >= 200) {
+      tick_count = 0;
+      UBaseType_t hwm = uxTaskGetStackHighWaterMark(NULL);
+      char buf[128];
+      snprintf(buf, sizeof(buf),
+               "[CLI] HWM: %lu words  |  [IMU] HWM: %lu words\r\n",
+               (unsigned long)hwm, (unsigned long)s_imu_hwm);
+      HAL_UART_Transmit(&huart2, (uint8_t *)buf, strlen(buf), 100);
     }
 #endif
   }
@@ -651,42 +683,37 @@ static void cli_task_fn(void *arg)
 
 /* USER CODE BEGIN Header_StartDefaultTask */
 /**
-  * @brief  IMU Task implementation.
-  * @param  argument: Not used
-  * @retval None
-  */
+ * @brief  IMU Task implementation.
+ * @param  argument: Not used
+ * @retval None
+ */
 /* USER CODE END Header_StartDefaultTask */
-void StartDefaultTask(void *argument)
-{
+void StartDefaultTask(void *argument) {
   /* USER CODE BEGIN 5 */
   /* Infinite loop */
-  for(;;)
-  {
+  for (;;) {
     osDelay(1);
   }
   /* USER CODE END 5 */
 }
 
 /**
-  * @brief  Period elapsed callback in non blocking mode
-  * @note   This function is called  when TIM1 interrupt took place, inside
-  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
-  * a global variable "uwTick" used as application time base.
-  * @param  htim : TIM handle
-  * @retval None
-  */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
+ * @brief  Period elapsed callback in non blocking mode
+ * @note   This function is called  when TIM1 interrupt took place, inside
+ * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+ * a global variable "uwTick" used as application time base.
+ * @param  htim : TIM handle
+ * @retval None
+ */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
   /* USER CODE BEGIN Callback 0 */
-  if (htim->Instance == TIM2)
-  {
+  if (htim->Instance == TIM2) {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     vTaskNotifyGiveFromISR(imuTaskHandle, &xHigherPriorityTaskWoken);
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
   }
   /* USER CODE END Callback 0 */
-  if (htim->Instance == TIM1)
-  {
+  if (htim->Instance == TIM1) {
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
@@ -695,32 +722,30 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 }
 
 /**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
-void Error_Handler(void)
-{
+ * @brief  This function is executed in case of error occurrence.
+ * @retval None
+ */
+void Error_Handler(void) {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1)
-  {
+  while (1) {
   }
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
 /**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
-void assert_failed(uint8_t *file, uint32_t line)
-{
+ * @brief  Reports the name of the source file and the source line number
+ *         where the assert_param error has occurred.
+ * @param  file: pointer to the source file name
+ * @param  line: assert_param error line source number
+ * @retval None
+ */
+void assert_failed(uint8_t *file, uint32_t line) {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* User can add his own implementation to report the file name and line
+     number, ex: printf("Wrong parameters value: file %s on line %d\r\n", file,
+     line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

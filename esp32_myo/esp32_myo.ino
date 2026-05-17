@@ -31,7 +31,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 // ─── TEST MODE ────────────────────────────────────────────────────────────────
 // Set to 1 to run without Myo armband (sends synthetic speed ramp via UART).
 // Set to 0 for normal BLE operation with Myo armband.
-#define TEST_MODE 1
+#define TEST_MODE 0
 
 // ─── CALIBRATION CONFIG ───────────────────────────────────────────────────────
 #define CALIB_PREPARE_MS  2000

@@ -94,7 +94,7 @@
  *  Outputs : ax_g, ay_g, az_g  — body-frame  accel   (g)
  *            wx,   wy,   wz    — body-frame  gyro    (rad/s)
  *
-/* ====== ACCEL/GYRO → BODY AXIS REMAP ======
+ * ====== ACCEL/GYRO → BODY AXIS REMAP ======
  * Orientation: 180-degree rotation around Roll (X-axis).
  * X remains unchanged. Y and Z are inverted.
  */
