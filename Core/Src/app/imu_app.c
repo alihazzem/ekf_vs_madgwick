@@ -54,6 +54,11 @@ static volatile bool s_mag_stream_en = false;
 static mpu6050_raw_t s_last;
 #endif
 
+// Raw accel (body frame, in g)
+static float s_ax_g = 0.0f;
+static float s_ay_g = 0.0f;
+static float s_az_g = 0.0f;
+
 // time + dt stats
 static uint32_t s_reset_ms = 0;
 static uint32_t s_last_sample_cyc = 0; // store cycles (wrap-safe)
@@ -250,6 +255,12 @@ void imu_app_step(void)
     float ax_g = REMAP_AX_G(ax_s, ay_s, az_s);
     float ay_g = REMAP_AY_G(ax_s, ay_s, az_s);
     float az_g = REMAP_AZ_G(ax_s, ay_s, az_s);
+
+    taskENTER_CRITICAL();
+    s_ax_g = ax_g;
+    s_ay_g = ay_g;
+    s_az_g = az_g;
+    taskEXIT_CRITICAL();
 
     float wx = REMAP_WX(wx_s, wy_s, wz_s);
     float wy = REMAP_WY(wx_s, wy_s, wz_s);
@@ -761,6 +772,15 @@ void imu_app_ekf_get_bias(float *bx, float *by, float *bz)
 uint32_t imu_app_ekf_last_us(void)
 {
   return s_ekf_last_us;
+}
+
+void imu_app_get_accel_g(float *ax, float *ay, float *az)
+{
+  taskENTER_CRITICAL();
+  if (ax) *ax = s_ax_g;
+  if (ay) *ay = s_ay_g;
+  if (az) *az = s_az_g;
+  taskEXIT_CRITICAL();
 }
 
 #if SENSOR_GY91

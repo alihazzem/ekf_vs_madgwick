@@ -83,6 +83,9 @@ void imu_app_cal_clear(void);
 bool imu_app_cal_get(int16_t *gx_off, int16_t *gy_off, int16_t *gz_off);
 bool imu_app_cal_gyro(uint32_t duration_ms); // blocking calibration
 
+// --- Raw Data ---
+void imu_app_get_accel_g(float *ax, float *ay, float *az);
+
 #if SENSOR_GY91
 /* Last AK8963 raw sample — valid=1 means fresh data was available. */
 void imu_app_get_mag_raw(ak8963_raw_t *out);

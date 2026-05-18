@@ -33,7 +33,9 @@
 #include <string.h>
 
 // #include "motor_test.h"
+#include "app/display_task.h" /* SystemState_t, displayQueueHandle */
 #include "drivers/emg_uart.h"
+#include "drivers/gripper.h"
 #include "utils/math3d.h"
 
 /* USER CODE END Includes */
@@ -45,7 +47,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define BYPASS_IMU_FILTER 0
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -55,6 +57,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
+I2C_HandleTypeDef hi2c2; /* OLED SSD1306 dedicated bus */
 
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
@@ -73,12 +76,18 @@ const osThreadAttr_t defaultTask_attributes = {
 /* USER CODE BEGIN PV */
 osThreadId_t imuTaskHandle;
 // osMessageQueueId_t motorCmdQueueHandle;
+
+/* Re-zero button: set to 1 by cli_task_fn (button ISR poll), cleared by
+ * imu_task_fn. volatile ensures both tasks see updates without a mutex
+ * (single-byte atomic write). */
+volatile uint8_t g_rezero_requested = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_I2C2_Init(void); /* OLED SSD1306 I2C bus */
 static void MX_TIM2_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM3_Init(void);
@@ -125,11 +134,13 @@ int main(void) {
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C1_Init();
+  MX_I2C2_Init(); /* OLED SSD1306 must be ready before scheduler starts */
   MX_TIM2_Init();
   MX_USART2_UART_Init();
   MX_TIM3_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  gripper_init();
   app_cli_print_banner();
   uart_cli_init(&huart2);
   timebase_init();
@@ -152,6 +163,11 @@ int main(void) {
 
   /* USER CODE BEGIN RTOS_QUEUES */
   // motorCmdQueueHandle = osMessageQueueNew(10, sizeof(MotorCmd_t), NULL);
+
+  /* Display queue: depth=1 so the IMU task always drops stale frames.
+   * osMessageQueuePut with timeout=0 returns immediately if full —
+   * the real-time loop is never blocked by the low-priority display task. */
+  displayQueueHandle = osMessageQueueNew(1, sizeof(SystemState_t), NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -167,6 +183,12 @@ int main(void) {
 
   osThreadNew(cli_task_fn, NULL,
               &(osThreadAttr_t){.name = "CLI",
+                                .priority = osPriorityLow,
+                                .stack_size = 512 * 4});
+
+  /* Display task: low priority, 512-word stack, renders OLED at ~10 Hz */
+  osThreadNew(display_task_fn, NULL,
+              &(osThreadAttr_t){.name = "DISP",
                                 .priority = osPriorityLow,
                                 .stack_size = 512 * 4});
 
@@ -432,6 +454,13 @@ static void MX_GPIO_Init(void) {
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* Re-zero button on PA0: INPUT, internal pull-up, active-low.
+   * Wire the button between PA0 and GND. No external resistor needed. */
+  GPIO_InitTypeDef btn = {0};
+  btn.Pin = GPIO_PIN_0;
+  btn.Mode = GPIO_MODE_INPUT;
+  btn.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOA, &btn);
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
@@ -521,20 +550,55 @@ static void imu_task_fn(void *arg) {
     q_ref[3] = ekf_att.q3;
   }
 
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); /* active-low: OFF */
-
-  /* Variables for servo smoothing (Exponential Moving Average)
-   * Initialized to exactly match the locked startup positions above!
-   */
+  /* ── Servo Smooth Startup ──────────────────────────────────────────────
+   * Seed smoothed values from the real EKF output instead of hardcoded
+   * defaults. Without this, the first loop iteration sees a large error
+   * and the servo races to catch up causing a violent startup jerk.
+   * ───────────────────────────────────────────────────────────────────── */
   float smoothed_pitch = 1500.0f;
   float smoothed_roll = 500.0f;
-  /*
-   * Tuning factor between 0.0 and 1.0.
-   * 1.0 = Instant (Raw IMU speed)
-   * 0.02 = Very smooth/slow (approx 0.25 seconds delay at 200Hz)
-   * Change this to make it faster or slower!
-   */
-  const float SERVO_SMOOTHING = 0.02f;
+
+  if (imu_app_get_ekf(&ekf_att)) {
+#if BYPASS_IMU_FILTER
+    float ax, ay, az;
+    imu_app_get_accel_g(&ax, &ay, &az);
+    float _p = atan2f(-ax, sqrtf(ay * ay + az * az)) * (180.0f / 3.14159265f);
+    float _r = atan2f(ay, az) * (180.0f / 3.14159265f);
+#else
+    /* Compute delta quaternion relative to q_ref for startup seed */
+    float q_conj[4] = {q_ref[0], -q_ref[1], -q_ref[2], -q_ref[3]};
+    float q_now_seed[4] = {ekf_att.q0, ekf_att.q1, ekf_att.q2, ekf_att.q3};
+    float q_delta_seed[4];
+    math3d_quat_multiply(q_conj, q_now_seed, q_delta_seed);
+
+    /* Extract pitch and roll via gravity vector (gimbal-lock-free) */
+    float w = q_delta_seed[0], x = q_delta_seed[1], y = q_delta_seed[2],
+          z = q_delta_seed[3];
+    float gx = 2.0f * (x * z - w * y);
+    float gy = 2.0f * (y * z + w * x);
+    float gz = w * w - x * x - y * y + z * z;
+    float _p = asinf(-gx) * (180.0f / 3.14159265f);
+    float _r = atan2f(gy, gz) * (180.0f / 3.14159265f);
+#endif
+
+    float pitch_us = 1500.0f + (_p * (2000.0f / 180.0f));
+    float roll_us = 1500.0f + (_r * (2000.0f / 180.0f));
+    smoothed_pitch = fmaxf(1167.0f, fminf(1833.0f, pitch_us));
+    smoothed_roll = fmaxf(500.0f, fminf(2500.0f, roll_us));
+  }
+
+  /* Pre-drive servos to seeded position and let them physically settle */
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)smoothed_pitch);
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, (uint32_t)smoothed_roll);
+  osDelay(pdMS_TO_TICKS(300));
+
+  gripper_home();
+
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); /* active-low: OFF */
+
+  /* Counts down after a re-zero event to flash "RE-ZEROED" on the display.
+   * 200 ticks @ 200Hz = 1 second of flash. */
+  uint32_t rezero_flash_count = 0;
 
   /* --- Main loop: IMU-driven motor control --- */
   while (1) {
@@ -544,13 +608,107 @@ static void imu_task_fn(void *arg) {
     }
     imu_app_step();
 
+    /* ── Re-zero button handler ───────────────────────────────────────
+     * cli_task_fn sets g_rezero_requested = 1 on valid button press.
+     * We re-capture q_ref from the current EKF output here (in IMU context
+     * where the EKF is already stepped), then clear the flag atomically. */
+    if (g_rezero_requested) {
+      g_rezero_requested = 0; /* Clear FIRST to avoid double-trigger */
+      if (imu_app_get_ekf(&ekf_att)) {
+        q_ref[0] = ekf_att.q0;
+        q_ref[1] = ekf_att.q1;
+        q_ref[2] = ekf_att.q2;
+        q_ref[3] = ekf_att.q3;
+      }
+      rezero_flash_count = 200U; /* Flash display for 1 second */
+    }
+    if (rezero_flash_count > 0U)
+      rezero_flash_count--;
+
     if (imu_app_get_ekf(&ekf_att)) {
+#if BYPASS_IMU_FILTER
+      float ax, ay, az;
+      imu_app_get_accel_g(&ax, &ay, &az);
+      float pitch_deg = atan2f(-ax, sqrtf(ay * ay + az * az)) * (180.0f / 3.14159265f);
+      float roll_deg = atan2f(ay, az) * (180.0f / 3.14159265f);
+#else
       float q_now[4] = {ekf_att.q0, ekf_att.q1, ekf_att.q2, ekf_att.q3};
 
-      /* Use absolute orientation directly instead of relative (q_delta) */
-      float roll_deg, pitch_deg, yaw_deg;
-      math3d_quat_to_euler_deg(q_now[0], q_now[1], q_now[2], q_now[3],
-                               &roll_deg, &pitch_deg, &yaw_deg);
+      /* STEP 1: Compute delta quaternion relative to neutral pose (q_ref).
+       * conjugate(q_ref) = [w, -x, -y, -z].
+       * q_delta = q_ref_conj * q_now represents how far the hand has moved
+       * FROM the neutral resting pose at startup.
+       */
+      float q_ref_conj[4] = {q_ref[0], -q_ref[1], -q_ref[2], -q_ref[3]};
+      float q_delta[4];
+      math3d_quat_multiply(q_ref_conj, q_now, q_delta);
+
+      /* STEP 2: Swing-Twist decomposition around the forearm X axis.
+       * TWIST — rotation around the forearm long axis [1, 0, 0]:
+       *   Project the vector part of q_delta onto the twist axis (pure X).
+       *   Raw twist = [q_delta.w, q_delta.x, 0, 0], then normalize.
+       *   This isolates forearm pronation/supination (palm up/down).
+       */
+      float twist_raw_w = q_delta[0];
+      float twist_raw_x = q_delta[1]; /* projection onto X axis */
+      float twist_norm =
+          sqrtf(twist_raw_w * twist_raw_w + twist_raw_x * twist_raw_x);
+      float q_twist[4];
+      if (twist_norm < 1e-6f) {
+        /* No twist at all — use identity */
+        q_twist[0] = 1.0f;
+        q_twist[1] = 0.0f;
+        q_twist[2] = 0.0f;
+        q_twist[3] = 0.0f;
+      } else {
+        q_twist[0] = twist_raw_w / twist_norm;
+        q_twist[1] = twist_raw_x / twist_norm;
+        q_twist[2] = 0.0f;
+        q_twist[3] = 0.0f;
+      }
+
+      /* SWING — remaining rotation with forearm twist removed:
+       *   q_swing = q_delta * conjugate(q_twist)
+       *   q_swing represents only the arm elevation/pointing direction.
+       */
+      float q_twist_conj[4] = {q_twist[0], -q_twist[1], 0.0f, 0.0f};
+      float q_swing[4];
+      math3d_quat_multiply(q_delta, q_twist_conj, q_swing);
+
+      /* STEP 3: Gimbal-lock-free angle extraction.
+       *
+       * PITCH from q_swing via gravity vector projection:
+       *   Rotate world gravity [0,0,1] into body frame using q_swing.
+       *   gx_swing = 2*(q_swing.x*q_swing.z - q_swing.w*q_swing.y)
+       *   pitch_deg = asin(-gx_swing)
+       *   Safe: q_swing has no forearm rotation, gz never flips sign.
+       *
+       * ROLL from q_twist directly:
+       *   roll_deg = 2 * atan2(q_twist.x, q_twist.w)
+       *   Continuous -180..+180 through all forearm rotations.
+       *   No gravity component used — no discontinuity ever.
+       */
+      float gx_swing =
+          2.0f * (q_swing[1] * q_swing[3] - q_swing[0] * q_swing[2]);
+      float pitch_deg = asinf(-gx_swing) * (180.0f / 3.14159265f);
+      float roll_deg =
+          2.0f * atan2f(q_twist[1], q_twist[0]) * (180.0f / 3.14159265f);
+#endif
+
+#define PITCH_DEADZONE_DEG 3.0f
+#define ROLL_DEADZONE_DEG 3.0f
+
+      if (fabsf(pitch_deg) < PITCH_DEADZONE_DEG)
+        pitch_deg = 0.0f;
+      else
+        pitch_deg = (pitch_deg > 0) ? (pitch_deg - PITCH_DEADZONE_DEG)
+                                    : (pitch_deg + PITCH_DEADZONE_DEG);
+
+      if (fabsf(roll_deg) < ROLL_DEADZONE_DEG)
+        roll_deg = 0.0f;
+      else
+        roll_deg = (roll_deg > 0) ? (roll_deg - ROLL_DEADZONE_DEG)
+                                  : (roll_deg + ROLL_DEADZONE_DEG);
 
       /*
        * SERVO 1 (Pitch): 180-degree servo
@@ -568,30 +726,60 @@ static void imu_task_fn(void *arg) {
           (uint32_t)fmaxf(1167.0f, fminf(1833.0f, pitch_servo_us));
 
       /*
-       * SERVO 2 (Roll): 
+       * SERVO 2 (Roll):
        * Assuming standard 180-degree physical sweep mapping for the servo.
        * Range: 500us (-90 deg) to 2500us (+90 deg) => 11.11 us/deg
        * Center: 1500us (0 deg)
-       * We want a max of 180 degrees total use (+/- 90 degrees from center)
+       * We want a max of 176 degrees total use (+/- 88 degrees from center)
        */
       float roll_servo_us = 1500.0f + (roll_deg * (2000.0f / 180.0f));
 
-      /* Constrain Roll to +/- 90 degrees from center (500us to 2500us)
+      /* Constrain Roll to +/- 88 degrees from center (522.2us to 2477.8us)
        * This strictly enforces the mechanical limit so the servo never moves
        * beyond it!
        */
       uint32_t ccr_roll =
-          (uint32_t)fmaxf(500.0f, fminf(2500.0f, roll_servo_us));
+          (uint32_t)fmaxf(522.2f, fminf(2477.8f, roll_servo_us));
 
-      /* Apply Exponential Smoothing Filter */
-      smoothed_pitch = (smoothed_pitch * (1.0f - SERVO_SMOOTHING)) +
-                       ((float)ccr_pitch * SERVO_SMOOTHING);
-      smoothed_roll = (smoothed_roll * (1.0f - SERVO_SMOOTHING)) +
-                      ((float)ccr_roll * SERVO_SMOOTHING);
+#define SERVO_EMA_ALPHA 0.2f /* Smoothing factor (0.0 to 1.0). Lower = smoother, Higher = more      \
+           responsive */
+#define SERVO_DEADBAND_US 3.0f /* Ignore very small noise */
+
+      {
+        float err = (float)ccr_pitch - smoothed_pitch;
+        if (fabsf(err) > SERVO_DEADBAND_US) {
+          /* Exponential Moving Average (EMA) for smooth, non-linear settling */
+          smoothed_pitch += err * SERVO_EMA_ALPHA;
+        }
+      }
+      {
+        float err = (float)ccr_roll - smoothed_roll;
+        if (fabsf(err) > SERVO_DEADBAND_US) {
+          smoothed_roll += err * SERVO_EMA_ALPHA;
+        }
+      }
 
       /* IMU control is now active using absolute orientation */
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)smoothed_pitch);
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, (uint32_t)smoothed_roll);
+
+      gripper_update();
+
+      /* ── Publish display snapshot (non-blocking producer) ───────────────
+       * timeout=0: if the display task hasn't consumed the last frame yet,
+       * osMessageQueuePut returns osErrorResource instantly and we move on.
+       * The real-time 200 Hz loop is NEVER delayed by the 10 Hz display. */
+      {
+        SystemState_t disp_state;
+        disp_state.pitch = pitch_deg;
+        disp_state.roll = roll_deg;
+        disp_state.servo_pitch_us = (uint32_t)smoothed_pitch;
+        disp_state.servo_roll_us = (uint32_t)smoothed_roll;
+        /* Flash RE-ZEROED on display for 1 second after button press */
+        disp_state.status = (rezero_flash_count > 0U) ? SYS_STATUS_REZEROED
+                                                      : SYS_STATUS_RUNNING;
+        osMessageQueuePut(displayQueueHandle, &disp_state, 0U, 0U);
+      }
 
 #if 0
       /* ── EMG → Speed ── */
@@ -663,9 +851,30 @@ static void cli_task_fn(void *arg) {
   (void)arg;
   uint32_t tick_count = 0;
   (void)tick_count;
+
+  /* Button debounce state */
+  uint8_t btn_prev = 1;      /* 1 = not pressed (pull-up idle) */
+  uint32_t btn_press_ms = 0; /* timestamp of when press started */
+
   while (1) {
     uart_cli_poll();
-    osDelay(5);
+    osDelay(5); /* 5ms poll interval */
+
+    /* ── Re-zero button poll (PA0, active-low, 50ms debounce) ── */
+    uint8_t btn_now = (uint8_t)HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+
+    if (btn_prev == 1 && btn_now == 0) {
+      /* Falling edge: button just pressed */
+      btn_press_ms = HAL_GetTick();
+    } else if (btn_prev == 0 && btn_now == 1) {
+      /* Rising edge: button released */
+      uint32_t held_ms = HAL_GetTick() - btn_press_ms;
+      if (held_ms >= 50U && held_ms < 2000U) {
+        /* Valid short press (50ms–2000ms) → request re-zero */
+        g_rezero_requested = 1;
+      }
+    }
+    btn_prev = btn_now;
 
 #if STACK_TUNING_MODE
     if (++tick_count >= 200) {
@@ -749,3 +958,47 @@ void assert_failed(uint8_t *file, uint32_t line) {
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+
+/**
+ * @brief I2C2 Initialization Function (OLED SSD1306 dedicated bus)
+ *
+ * Pins (STM32F411CEU6 48-pin Black Pill):
+ *   PB10 → I2C2_SCL  (AF4, Open-Drain, pull-up)
+ *   PB3  → I2C2_SDA  (AF9, Open-Drain, pull-up)
+ *
+ * Speed: 400 kHz (Fast-Mode). The SSD1306 supports up to 400 kHz.
+ */
+static void MX_I2C2_Init(void) {
+  /* Enable clocks */
+  __HAL_RCC_I2C2_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /* Configure PB10 (SCL) — AF4 */
+  GPIO_InitTypeDef gpio = {0};
+  gpio.Pin = GPIO_PIN_10;
+  gpio.Mode = GPIO_MODE_AF_OD;
+  gpio.Pull = GPIO_PULLUP;
+  gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  gpio.Alternate = GPIO_AF4_I2C2;
+  HAL_GPIO_Init(GPIOB, &gpio);
+
+  /* Configure PB3 (SDA) — AF9 (different AF from SCL on this package!) */
+  gpio.Pin = GPIO_PIN_3;
+  gpio.Alternate = GPIO_AF9_I2C2;
+  HAL_GPIO_Init(GPIOB, &gpio);
+
+  /* Configure I2C2 peripheral */
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.ClockSpeed = 400000U; /* 400 kHz Fast-Mode */
+  hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
+    Error_Handler();
+  }
+}

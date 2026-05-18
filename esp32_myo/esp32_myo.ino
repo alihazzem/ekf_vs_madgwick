@@ -66,9 +66,9 @@ float         calibAccum      = 0;
 int           calibSamples    = 0;
 unsigned long calibPhaseStart = 0;
 
-float THR_DEAD = 0;
-float THR_LOW  = 0;
-float THR_MID  = 0;
+float THR_ACTIVATE   = 0;
+float THR_DEACTIVATE = 0;
+float restRMS        = 0;
 
 // ─── BLE STATE ────────────────────────────────────────────────────────────────
 BLEClient*           client       = nullptr;
@@ -142,16 +142,18 @@ void updateOLED(const char* statusMsg) {
   display.println(statusMsg);
 
   display.setCursor(0, 20);
-  display.printf("Dead:%.1f Mid:%.1f", THR_DEAD, THR_MID);
+  display.printf("A:%.1f D:%.1f", THR_ACTIVATE, THR_DEACTIVATE);
 
   display.setCursor(0, 35);
   display.print("RMS: ");
   display.print(debugRMS, 1);
 
   display.setCursor(0, 50);
-  display.print("CMD Speed: ");
-  display.print(debugSpeed);
-  display.print("%");
+  if (debugSpeed == 100) {
+    display.print("GRIP: ACTIVE");
+  } else {
+    display.print("GRIP: RELAXED");
+  }
 
   display.display();
 }
@@ -180,14 +182,16 @@ float applyHighpass(float x, int ch) {
 // ─── SPEED QUANTIZATION ──────────────────────────────────────────────────────
 uint8_t rmsToSpeed(float rms) {
   static uint8_t lastSpeed = 0;
-  float hys = (THR_MID - THR_DEAD) * 0.10f;
 
-  if      (lastSpeed == 0)  { if (rms >= THR_DEAD + hys)        lastSpeed = 33;  }
-  else if (lastSpeed == 33) { if (rms <  THR_DEAD)              lastSpeed = 0;
-                              else if (rms >= THR_LOW + hys)     lastSpeed = 66;  }
-  else if (lastSpeed == 66) { if (rms <  THR_LOW  - hys)        lastSpeed = 33;
-                              else if (rms >= THR_MID + hys)     lastSpeed = 100; }
-  else                      { if (rms <  THR_MID  - hys)        lastSpeed = 66;  }
+  if (lastSpeed == 0) {
+    if (rms >= THR_ACTIVATE) {
+      lastSpeed = 100;
+    }
+  } else {
+    if (rms <= THR_DEACTIVATE) {
+      lastSpeed = 0;
+    }
+  }
   return lastSpeed;
 }
 
@@ -221,7 +225,7 @@ void handleCalibration(float rms) {
     calibSamples++;
 
     if (millis() - calibPhaseStart >= CALIB_DURATION_MS) {
-      THR_DEAD     = (calibAccum / calibSamples) * 2.0f;
+      restRMS      = calibAccum / calibSamples;
       calibState   = CALIB_MAX;
       calibStarted = false;
     }
@@ -240,11 +244,11 @@ void handleCalibration(float rms) {
     calibSamples++;
 
     if (millis() - calibPhaseStart >= CALIB_DURATION_MS) {
-      float calibMaxRMS = calibAccum / calibSamples;
-      float range       = calibMaxRMS - THR_DEAD;
+      float flexRMS = calibAccum / calibSamples;
+      float range   = flexRMS - restRMS;
 
-      THR_LOW    = THR_DEAD + range * 0.50f;
-      THR_MID    = THR_DEAD + range * 0.70f;
+      THR_DEACTIVATE = restRMS + range * 0.30f;
+      THR_ACTIVATE   = restRMS + range * 0.65f;
 
       calibState = CALIB_DONE;
       currentLED = LED_ACTIVE;
@@ -270,12 +274,12 @@ uint16_t sampleCount    = 0;
 
 // ─── TEST MODE STATE ─────────────────────────────────────────────────────────
 #if TEST_MODE
-const uint8_t  testSpeeds[]    = {0, 33, 66, 100, 66, 33};
+const uint8_t  testSpeeds[]    = {0, 100, 0, 100};
 const uint8_t  testNumSteps    = sizeof(testSpeeds);
 uint8_t        testStep        = 0;
 unsigned long  testLastStepMs  = 0;
 unsigned long  testLastPktMs   = 0;
-const float    testFakeRMS[]   = {0.0f, 15.0f, 30.0f, 45.0f, 30.0f, 15.0f};
+const float    testFakeRMS[]   = {0.0f, 50.0f, 0.0f, 50.0f};
 #endif
 
 // ─── EMG CALLBACK ────────────────────────────────────────────────────────────
