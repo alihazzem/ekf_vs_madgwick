@@ -108,7 +108,8 @@ static void cli_task_fn(void *arg);
  * @brief  The application entry point.
  * @retval int
  */
-int main(void) {
+int main(void)
+{
 
   /* USER CODE BEGIN 1 */
 
@@ -137,6 +138,20 @@ int main(void) {
   MX_I2C2_Init(); /* OLED SSD1306 must be ready before scheduler starts */
   MX_TIM2_Init();
   MX_USART2_UART_Init();
+
+  /* Deselect onboard SPI Flash (PA4=CS) so it releases PA6 (MISO) / PA7 (MOSI).
+   * On the Black Pill the flash shares these pins with TIM3_CH1/CH2.         */
+  {
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    GPIO_InitTypeDef flash_cs = {0};
+    flash_cs.Pin       = GPIO_PIN_4;
+    flash_cs.Mode      = GPIO_MODE_OUTPUT_PP;
+    flash_cs.Pull      = GPIO_NOPULL;
+    flash_cs.Speed     = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOA, &flash_cs);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
+  }
+
   MX_TIM3_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
@@ -210,7 +225,8 @@ int main(void) {
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1) {
+  while (1)
+  {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -222,7 +238,8 @@ int main(void) {
  * @brief System Clock Configuration
  * @retval None
  */
-void SystemClock_Config(void) {
+void SystemClock_Config(void)
+{
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
@@ -242,7 +259,8 @@ void SystemClock_Config(void) {
   RCC_OscInitStruct.PLL.PLLN = 336;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
   RCC_OscInitStruct.PLL.PLLQ = 4;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
     Error_Handler();
   }
 
@@ -255,7 +273,8 @@ void SystemClock_Config(void) {
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
     Error_Handler();
   }
 }
@@ -265,7 +284,8 @@ void SystemClock_Config(void) {
  * @param None
  * @retval None
  */
-static void MX_I2C1_Init(void) {
+static void MX_I2C1_Init(void)
+{
 
   /* USER CODE BEGIN I2C1_Init 0 */
 
@@ -283,7 +303,8 @@ static void MX_I2C1_Init(void) {
   hi2c1.Init.OwnAddress2 = 0;
   hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK) {
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
     Error_Handler();
   }
   /* USER CODE BEGIN I2C1_Init 2 */
@@ -296,7 +317,8 @@ static void MX_I2C1_Init(void) {
  * @param None
  * @retval None
  */
-static void MX_TIM2_Init(void) {
+static void MX_TIM2_Init(void)
+{
 
   /* USER CODE BEGIN TIM2_Init 0 */
 
@@ -314,16 +336,19 @@ static void MX_TIM2_Init(void) {
   htim2.Init.Period = 49;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK) {
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK) {
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK) {
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM2_Init 2 */
@@ -336,7 +361,8 @@ static void MX_TIM2_Init(void) {
  * @param None
  * @retval None
  */
-static void MX_TIM3_Init(void) {
+static void MX_TIM3_Init(void)
+{
 
   /* USER CODE BEGIN TIM3_Init 0 */
 
@@ -355,16 +381,19 @@ static void MX_TIM3_Init(void) {
   htim3.Init.Period = 19999;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK) {
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK) {
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK) {
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
     Error_Handler();
   }
 
@@ -373,10 +402,20 @@ static void MX_TIM3_Init(void) {
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
 
-  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) {
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK) {
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM3_Init 2 */
@@ -389,7 +428,8 @@ static void MX_TIM3_Init(void) {
  * @param None
  * @retval None
  */
-static void MX_USART2_UART_Init(void) {
+static void MX_USART2_UART_Init(void)
+{
 
   /* USER CODE BEGIN USART2_Init 0 */
 
@@ -406,7 +446,8 @@ static void MX_USART2_UART_Init(void) {
   huart2.Init.Mode = UART_MODE_TX_RX;
   huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart2) != HAL_OK) {
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
     Error_Handler();
   }
   /* USER CODE BEGIN USART2_Init 2 */
@@ -414,7 +455,8 @@ static void MX_USART2_UART_Init(void) {
   /* USER CODE END USART2_Init 2 */
 }
 
-static void MX_USART1_UART_Init(void) {
+static void MX_USART1_UART_Init(void)
+{
 
   /* USER CODE BEGIN USART1_Init 0 */
 
@@ -431,7 +473,8 @@ static void MX_USART1_UART_Init(void) {
   huart1.Init.Mode = UART_MODE_RX;
   huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK) {
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
@@ -444,7 +487,8 @@ static void MX_USART1_UART_Init(void) {
  * @param None
  * @retval None
  */
-static void MX_GPIO_Init(void) {
+static void MX_GPIO_Init(void)
+{
   /* USER CODE BEGIN MX_GPIO_Init_1 */
   /* USER CODE END MX_GPIO_Init_1 */
 
@@ -465,23 +509,29 @@ static void MX_GPIO_Init(void) {
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
-  if (huart->Instance == USART1) {
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
+  if (huart->Instance == USART1)
+  {
     emg_uart_on_rx_event(huart, Size);
   }
 }
 
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
-  if (huart->Instance == USART1) {
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
+  {
     emg_uart_recover();
   }
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
   uart_cli_on_rx_byte(huart);
 }
 
-void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) {
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+{
   (void)xTask;
   (void)pcTaskName;
   __BKPT(0);
@@ -493,11 +543,11 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) {
 static volatile UBaseType_t s_imu_hwm = 0;
 #endif
 
-static void imu_task_fn(void *arg) {
+static void imu_task_fn(void *arg)
+{
   (void)arg;
   uint32_t tick_count = 0;
   (void)tick_count;
-  // MotorCmd_t cmd;
 
   /* --- Startup: LED on PC13 signals calibration --- */
   __HAL_RCC_GPIOC_CLK_ENABLE();
@@ -518,10 +568,12 @@ static void imu_task_fn(void *arg) {
   /* --- Init Servos to Safe Lock Position during calibration --- */
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1,
-                        1500); // Pitch Servo: 90 degrees (Center)
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2,
-                        500); // Roll Servo: Maximum lower limit
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 1500); // Pitch 1
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 500);  // Roll 1
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 1500); // Pitch 2
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 500);  // Roll 2
 
   /* --- Now begin the lengthy IMU initialization and calibration --- */
   imu_app_stream_set(false);
@@ -535,251 +587,211 @@ static void imu_task_fn(void *arg) {
 
   /* Let EKF converge (~50 samples ≈ 250 ms at 200 Hz) */
   HAL_TIM_Base_Start_IT(&htim2);
-  Attitude_t ekf_att;
-  for (int i = 0; i < 50; i++) {
+  Attitude_t ekf_att[NUM_IMUS];
+  for (int i = 0; i < 50; i++)
+  {
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
     imu_app_step();
   }
 
   /* Capture q_ref = neutral pose */
-  float q_ref[4] = {1.0f, 0.0f, 0.0f, 0.0f};
-  if (imu_app_get_ekf(&ekf_att)) {
-    q_ref[0] = ekf_att.q0;
-    q_ref[1] = ekf_att.q1;
-    q_ref[2] = ekf_att.q2;
-    q_ref[3] = ekf_att.q3;
+  float q_ref[NUM_IMUS][4];
+  for (int i = 0; i < NUM_IMUS; i++) {
+    q_ref[i][0] = 1.0f; q_ref[i][1] = 0.0f; q_ref[i][2] = 0.0f; q_ref[i][3] = 0.0f;
+    if (imu_app_get_ekf(i, &ekf_att[i])) {
+      q_ref[i][0] = ekf_att[i].q0;
+      q_ref[i][1] = ekf_att[i].q1;
+      q_ref[i][2] = ekf_att[i].q2;
+      q_ref[i][3] = ekf_att[i].q3;
+    }
   }
 
-  /* ── Servo Smooth Startup ──────────────────────────────────────────────
-   * Seed smoothed values from the real EKF output instead of hardcoded
-   * defaults. Without this, the first loop iteration sees a large error
-   * and the servo races to catch up causing a violent startup jerk.
-   * ───────────────────────────────────────────────────────────────────── */
-  float smoothed_pitch = 1500.0f;
-  float smoothed_roll = 500.0f;
+  /* ── Servo Smooth Startup ────────────────────────────────────────────── */
+  float smoothed_pitch[NUM_IMUS];
+  float smoothed_roll[NUM_IMUS];
 
-  if (imu_app_get_ekf(&ekf_att)) {
+  for (int i = 0; i < NUM_IMUS; i++) {
+    smoothed_pitch[i] = 1500.0f;
+    smoothed_roll[i] = 500.0f;
+
+    if (imu_app_get_ekf(i, &ekf_att[i])) {
 #if BYPASS_IMU_FILTER
-    float ax, ay, az;
-    imu_app_get_accel_g(&ax, &ay, &az);
-    float _p = atan2f(-ax, sqrtf(ay * ay + az * az)) * (180.0f / 3.14159265f);
-    float _r = atan2f(ay, az) * (180.0f / 3.14159265f);
+      float ax, ay, az;
+      imu_app_get_accel_g(i, &ax, &ay, &az);
+      float _p = atan2f(-ax, sqrtf(ay * ay + az * az)) * (180.0f / 3.14159265f);
+      float _r = atan2f(ay, az) * (180.0f / 3.14159265f);
 #else
-    /* Compute delta quaternion relative to q_ref for startup seed */
-    float q_conj[4] = {q_ref[0], -q_ref[1], -q_ref[2], -q_ref[3]};
-    float q_now_seed[4] = {ekf_att.q0, ekf_att.q1, ekf_att.q2, ekf_att.q3};
-    float q_delta_seed[4];
-    math3d_quat_multiply(q_conj, q_now_seed, q_delta_seed);
+      float q_conj[4] = {q_ref[i][0], -q_ref[i][1], -q_ref[i][2], -q_ref[i][3]};
+      float q_now_seed[4] = {ekf_att[i].q0, ekf_att[i].q1, ekf_att[i].q2, ekf_att[i].q3};
+      float q_delta_seed[4];
+      math3d_quat_multiply(q_conj, q_now_seed, q_delta_seed);
 
-    /* Extract pitch and roll via gravity vector (gimbal-lock-free) */
-    float w = q_delta_seed[0], x = q_delta_seed[1], y = q_delta_seed[2],
-          z = q_delta_seed[3];
-    float gx = 2.0f * (x * z - w * y);
-    float gy = 2.0f * (y * z + w * x);
-    float gz = w * w - x * x - y * y + z * z;
-    float _p = asinf(-gx) * (180.0f / 3.14159265f);
-    float _r = atan2f(gy, gz) * (180.0f / 3.14159265f);
+      float w = q_delta_seed[0], x = q_delta_seed[1], y = q_delta_seed[2], z = q_delta_seed[3];
+      float gx = 2.0f * (x * z - w * y);
+      float gy = 2.0f * (y * z + w * x);
+      float gz = w * w - x * x - y * y + z * z;
+      float _p = asinf(-gx) * (180.0f / 3.14159265f);
+      float _r = atan2f(gy, gz) * (180.0f / 3.14159265f);
 #endif
 
-    float pitch_us = 1500.0f + (_p * (2000.0f / 180.0f));
-    float roll_us = 1500.0f + (_r * (2000.0f / 180.0f));
-    smoothed_pitch = fmaxf(1167.0f, fminf(1833.0f, pitch_us));
-    smoothed_roll = fmaxf(500.0f, fminf(2500.0f, roll_us));
+      float pitch_us = 1500.0f + (_p * (2000.0f / 180.0f));
+      float roll_us = 1500.0f + (_r * (2000.0f / 180.0f));
+      smoothed_pitch[i] = fmaxf(1055.6f, fminf(1944.4f, pitch_us));
+      smoothed_roll[i] = fmaxf(500.0f, fminf(2500.0f, roll_us));
+    }
   }
 
   /* Pre-drive servos to seeded position and let them physically settle */
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)smoothed_pitch);
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, (uint32_t)smoothed_roll);
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)smoothed_pitch[0]);
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, (uint32_t)smoothed_roll[0]);
+  if (NUM_IMUS > 1) {
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, (uint32_t)smoothed_pitch[1]);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, (uint32_t)smoothed_roll[1]);
+  }
   osDelay(pdMS_TO_TICKS(300));
 
   gripper_home();
 
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); /* active-low: OFF */
 
-  /* Counts down after a re-zero event to flash "RE-ZEROED" on the display.
-   * 200 ticks @ 200Hz = 1 second of flash. */
   uint32_t rezero_flash_count = 0;
 
   /* --- Main loop: IMU-driven motor control --- */
-  while (1) {
+  while (1)
+  {
     uint32_t count = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    if (count > 1) {
+    if (count > 1)
+    {
       imu_app_add_missed(count - 1);
     }
     imu_app_step();
 
-    /* ── Re-zero button handler ───────────────────────────────────────
-     * cli_task_fn sets g_rezero_requested = 1 on valid button press.
-     * We re-capture q_ref from the current EKF output here (in IMU context
-     * where the EKF is already stepped), then clear the flag atomically. */
-    if (g_rezero_requested) {
+    if (g_rezero_requested)
+    {
       g_rezero_requested = 0; /* Clear FIRST to avoid double-trigger */
-      if (imu_app_get_ekf(&ekf_att)) {
-        q_ref[0] = ekf_att.q0;
-        q_ref[1] = ekf_att.q1;
-        q_ref[2] = ekf_att.q2;
-        q_ref[3] = ekf_att.q3;
+      for (int i = 0; i < NUM_IMUS; i++) {
+        if (imu_app_get_ekf(i, &ekf_att[i])) {
+          q_ref[i][0] = ekf_att[i].q0;
+          q_ref[i][1] = ekf_att[i].q1;
+          q_ref[i][2] = ekf_att[i].q2;
+          q_ref[i][3] = ekf_att[i].q3;
+        }
       }
       rezero_flash_count = 200U; /* Flash display for 1 second */
     }
     if (rezero_flash_count > 0U)
       rezero_flash_count--;
 
-    if (imu_app_get_ekf(&ekf_att)) {
+    float final_pitch_deg[NUM_IMUS] = {0};
+    float final_roll_deg[NUM_IMUS] = {0};
+
+    for (int i = 0; i < NUM_IMUS; i++) {
+      if (imu_app_get_ekf(i, &ekf_att[i]))
+      {
 #if BYPASS_IMU_FILTER
-      float ax, ay, az;
-      imu_app_get_accel_g(&ax, &ay, &az);
-      float pitch_deg = atan2f(-ax, sqrtf(ay * ay + az * az)) * (180.0f / 3.14159265f);
-      float roll_deg = atan2f(ay, az) * (180.0f / 3.14159265f);
+        float ax, ay, az;
+        imu_app_get_accel_g(i, &ax, &ay, &az);
+        float pitch_deg = atan2f(-ax, sqrtf(ay * ay + az * az)) * (180.0f / 3.14159265f);
+        float roll_deg = atan2f(ay, az) * (180.0f / 3.14159265f);
 #else
-      float q_now[4] = {ekf_att.q0, ekf_att.q1, ekf_att.q2, ekf_att.q3};
+        float q_now[4] = {ekf_att[i].q0, ekf_att[i].q1, ekf_att[i].q2, ekf_att[i].q3};
 
-      /* STEP 1: Compute delta quaternion relative to neutral pose (q_ref).
-       * conjugate(q_ref) = [w, -x, -y, -z].
-       * q_delta = q_ref_conj * q_now represents how far the hand has moved
-       * FROM the neutral resting pose at startup.
-       */
-      float q_ref_conj[4] = {q_ref[0], -q_ref[1], -q_ref[2], -q_ref[3]};
-      float q_delta[4];
-      math3d_quat_multiply(q_ref_conj, q_now, q_delta);
+        float q_ref_conj[4] = {q_ref[i][0], -q_ref[i][1], -q_ref[i][2], -q_ref[i][3]};
+        float q_delta[4];
+        math3d_quat_multiply(q_ref_conj, q_now, q_delta);
 
-      /* STEP 2: Swing-Twist decomposition around the forearm X axis.
-       * TWIST — rotation around the forearm long axis [1, 0, 0]:
-       *   Project the vector part of q_delta onto the twist axis (pure X).
-       *   Raw twist = [q_delta.w, q_delta.x, 0, 0], then normalize.
-       *   This isolates forearm pronation/supination (palm up/down).
-       */
-      float twist_raw_w = q_delta[0];
-      float twist_raw_x = q_delta[1]; /* projection onto X axis */
-      float twist_norm =
-          sqrtf(twist_raw_w * twist_raw_w + twist_raw_x * twist_raw_x);
-      float q_twist[4];
-      if (twist_norm < 1e-6f) {
-        /* No twist at all — use identity */
-        q_twist[0] = 1.0f;
-        q_twist[1] = 0.0f;
-        q_twist[2] = 0.0f;
-        q_twist[3] = 0.0f;
-      } else {
-        q_twist[0] = twist_raw_w / twist_norm;
-        q_twist[1] = twist_raw_x / twist_norm;
-        q_twist[2] = 0.0f;
-        q_twist[3] = 0.0f;
-      }
+        float twist_raw_w = q_delta[0];
+        float twist_raw_x = q_delta[1];
+        float twist_norm = sqrtf(twist_raw_w * twist_raw_w + twist_raw_x * twist_raw_x);
+        float q_twist[4];
+        if (twist_norm < 1e-6f) {
+          q_twist[0] = 1.0f; q_twist[1] = 0.0f; q_twist[2] = 0.0f; q_twist[3] = 0.0f;
+        } else {
+          q_twist[0] = twist_raw_w / twist_norm;
+          q_twist[1] = twist_raw_x / twist_norm;
+          q_twist[2] = 0.0f; q_twist[3] = 0.0f;
+        }
 
-      /* SWING — remaining rotation with forearm twist removed:
-       *   q_swing = q_delta * conjugate(q_twist)
-       *   q_swing represents only the arm elevation/pointing direction.
-       */
-      float q_twist_conj[4] = {q_twist[0], -q_twist[1], 0.0f, 0.0f};
-      float q_swing[4];
-      math3d_quat_multiply(q_delta, q_twist_conj, q_swing);
+        float q_twist_conj[4] = {q_twist[0], -q_twist[1], 0.0f, 0.0f};
+        float q_swing[4];
+        math3d_quat_multiply(q_delta, q_twist_conj, q_swing);
 
-      /* STEP 3: Gimbal-lock-free angle extraction.
-       *
-       * PITCH from q_swing via gravity vector projection:
-       *   Rotate world gravity [0,0,1] into body frame using q_swing.
-       *   gx_swing = 2*(q_swing.x*q_swing.z - q_swing.w*q_swing.y)
-       *   pitch_deg = asin(-gx_swing)
-       *   Safe: q_swing has no forearm rotation, gz never flips sign.
-       *
-       * ROLL from q_twist directly:
-       *   roll_deg = 2 * atan2(q_twist.x, q_twist.w)
-       *   Continuous -180..+180 through all forearm rotations.
-       *   No gravity component used — no discontinuity ever.
-       */
-      float gx_swing =
-          2.0f * (q_swing[1] * q_swing[3] - q_swing[0] * q_swing[2]);
-      float pitch_deg = asinf(-gx_swing) * (180.0f / 3.14159265f);
-      float roll_deg =
-          2.0f * atan2f(q_twist[1], q_twist[0]) * (180.0f / 3.14159265f);
+        float gx_swing = 2.0f * (q_swing[1] * q_swing[3] - q_swing[0] * q_swing[2]);
+        float pitch_deg = asinf(-gx_swing) * (180.0f / 3.14159265f);
+        float roll_deg = 2.0f * atan2f(q_twist[1], q_twist[0]) * (180.0f / 3.14159265f);
 #endif
 
 #define PITCH_DEADZONE_DEG 3.0f
 #define ROLL_DEADZONE_DEG 3.0f
 
-      if (fabsf(pitch_deg) < PITCH_DEADZONE_DEG)
-        pitch_deg = 0.0f;
-      else
-        pitch_deg = (pitch_deg > 0) ? (pitch_deg - PITCH_DEADZONE_DEG)
-                                    : (pitch_deg + PITCH_DEADZONE_DEG);
+        if (fabsf(pitch_deg) < PITCH_DEADZONE_DEG)
+          pitch_deg = 0.0f;
+        else
+          pitch_deg = (pitch_deg > 0) ? (pitch_deg - PITCH_DEADZONE_DEG)
+                                      : (pitch_deg + PITCH_DEADZONE_DEG);
 
-      if (fabsf(roll_deg) < ROLL_DEADZONE_DEG)
-        roll_deg = 0.0f;
-      else
-        roll_deg = (roll_deg > 0) ? (roll_deg - ROLL_DEADZONE_DEG)
-                                  : (roll_deg + ROLL_DEADZONE_DEG);
+        if (fabsf(roll_deg) < ROLL_DEADZONE_DEG)
+          roll_deg = 0.0f;
+        else
+          roll_deg = (roll_deg > 0) ? (roll_deg - ROLL_DEADZONE_DEG)
+                                    : (roll_deg + ROLL_DEADZONE_DEG);
 
-      /*
-       * SERVO 1 (Pitch): 180-degree servo
-       * Range: 500us (0 deg) to 2500us (180 deg) => 11.11 us/deg
-       * Center: 1500us (90 deg)
-       * We want a max of 60 degrees total use (+/- 30 degrees from center)
-       */
-      float pitch_servo_us = 1500.0f + (pitch_deg * (2000.0f / 180.0f));
+        final_pitch_deg[i] = pitch_deg;
+        final_roll_deg[i] = roll_deg;
 
-      /* Constrain Pitch to +/- 30 degrees from center (1167us to 1833us)
-       * This strictly enforces the mechanical limit so the servo never moves
-       * beyond it!
-       */
-      uint32_t ccr_pitch =
-          (uint32_t)fmaxf(1167.0f, fminf(1833.0f, pitch_servo_us));
+        float pitch_servo_us = 1500.0f + (pitch_deg * (2000.0f / 180.0f));
+        uint32_t ccr_pitch = (uint32_t)fmaxf(1055.6f, fminf(1944.4f, pitch_servo_us));
 
-      /*
-       * SERVO 2 (Roll):
-       * Assuming standard 180-degree physical sweep mapping for the servo.
-       * Range: 500us (-90 deg) to 2500us (+90 deg) => 11.11 us/deg
-       * Center: 1500us (0 deg)
-       * We want a max of 176 degrees total use (+/- 88 degrees from center)
-       */
-      float roll_servo_us = 1500.0f + (roll_deg * (2000.0f / 180.0f));
+        float roll_servo_us = 1500.0f + (roll_deg * (2000.0f / 180.0f));
+        uint32_t ccr_roll = (uint32_t)fmaxf(500.0f, fminf(2500.0f, roll_servo_us));
 
-      /* Constrain Roll to +/- 88 degrees from center (522.2us to 2477.8us)
-       * This strictly enforces the mechanical limit so the servo never moves
-       * beyond it!
-       */
-      uint32_t ccr_roll =
-          (uint32_t)fmaxf(522.2f, fminf(2477.8f, roll_servo_us));
+#define SERVO_EMA_ALPHA 0.2f
+#define SERVO_DEADBAND_US 5.0f
 
-#define SERVO_EMA_ALPHA 0.2f /* Smoothing factor (0.0 to 1.0). Lower = smoother, Higher = more      \
-           responsive */
-#define SERVO_DEADBAND_US 3.0f /* Ignore very small noise */
+        float err_pitch = (float)ccr_pitch - smoothed_pitch[i];
+        if (fabsf(err_pitch) > SERVO_DEADBAND_US) {
+          smoothed_pitch[i] += err_pitch * SERVO_EMA_ALPHA;
+        }
 
-      {
-        float err = (float)ccr_pitch - smoothed_pitch;
-        if (fabsf(err) > SERVO_DEADBAND_US) {
-          /* Exponential Moving Average (EMA) for smooth, non-linear settling */
-          smoothed_pitch += err * SERVO_EMA_ALPHA;
+        float err_roll = (float)ccr_roll - smoothed_roll[i];
+        if (fabsf(err_roll) > SERVO_DEADBAND_US) {
+          smoothed_roll[i] += err_roll * SERVO_EMA_ALPHA;
         }
       }
-      {
-        float err = (float)ccr_roll - smoothed_roll;
-        if (fabsf(err) > SERVO_DEADBAND_US) {
-          smoothed_roll += err * SERVO_EMA_ALPHA;
-        }
+    }
+
+    /* IMU control is now active using absolute orientation */
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)smoothed_pitch[0]);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, (uint32_t)smoothed_roll[0]);
+    if (NUM_IMUS > 1) {
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, (uint32_t)smoothed_pitch[1]);
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, (uint32_t)smoothed_roll[1]);
+    }
+
+    gripper_update();
+
+    {
+      SystemState_t disp_state;
+      disp_state.pitch_0 = final_pitch_deg[0];
+      disp_state.roll_0  = final_roll_deg[0];
+      disp_state.servo_pitch_us_0 = (uint32_t)smoothed_pitch[0];
+      disp_state.servo_roll_us_0  = (uint32_t)smoothed_roll[0];
+      if (NUM_IMUS > 1) {
+        disp_state.pitch_1 = final_pitch_deg[1];
+        disp_state.roll_1  = final_roll_deg[1];
+        disp_state.servo_pitch_us_1 = (uint32_t)smoothed_pitch[1];
+        disp_state.servo_roll_us_1  = (uint32_t)smoothed_roll[1];
+      } else {
+        disp_state.pitch_1 = 0.0f;
+        disp_state.roll_1  = 0.0f;
+        disp_state.servo_pitch_us_1 = 1500U;
+        disp_state.servo_roll_us_1  = 1500U;
       }
-
-      /* IMU control is now active using absolute orientation */
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)smoothed_pitch);
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, (uint32_t)smoothed_roll);
-
-      gripper_update();
-
-      /* ── Publish display snapshot (non-blocking producer) ───────────────
-       * timeout=0: if the display task hasn't consumed the last frame yet,
-       * osMessageQueuePut returns osErrorResource instantly and we move on.
-       * The real-time 200 Hz loop is NEVER delayed by the 10 Hz display. */
-      {
-        SystemState_t disp_state;
-        disp_state.pitch = pitch_deg;
-        disp_state.roll = roll_deg;
-        disp_state.servo_pitch_us = (uint32_t)smoothed_pitch;
-        disp_state.servo_roll_us = (uint32_t)smoothed_roll;
-        /* Flash RE-ZEROED on display for 1 second after button press */
-        disp_state.status = (rezero_flash_count > 0U) ? SYS_STATUS_REZEROED
-                                                      : SYS_STATUS_RUNNING;
-        osMessageQueuePut(displayQueueHandle, &disp_state, 0U, 0U);
-      }
+      /* Flash RE-ZEROED on display for 1 second after button press */
+      disp_state.status = (rezero_flash_count > 0U) ? SYS_STATUS_REZEROED
+                                                    : SYS_STATUS_RUNNING;
+      osMessageQueuePut(displayQueueHandle, &disp_state, 0U, 0U);
+    }
 
 #if 0
       /* ── EMG → Speed ── */
@@ -829,10 +841,9 @@ static void imu_task_fn(void *arg) {
 
       osMessageQueuePut(motorCmdQueueHandle, &cmd, 0, 0);
 #endif
-    }
-
 #if STACK_TUNING_MODE
-    if (++tick_count >= 1000) {
+    if (++tick_count >= 1000)
+    {
       tick_count = 0;
       s_imu_hwm = uxTaskGetStackHighWaterMark(NULL);
     }
@@ -840,14 +851,16 @@ static void imu_task_fn(void *arg) {
 
 #ifdef DEBUG
     UBaseType_t hwm = uxTaskGetStackHighWaterMark(NULL);
-    if (hwm < 100) {
+    if (hwm < 100)
+    {
       __BKPT(0);
     }
 #endif
   }
 }
 
-static void cli_task_fn(void *arg) {
+static void cli_task_fn(void *arg)
+{
   (void)arg;
   uint32_t tick_count = 0;
   (void)tick_count;
@@ -856,20 +869,25 @@ static void cli_task_fn(void *arg) {
   uint8_t btn_prev = 1;      /* 1 = not pressed (pull-up idle) */
   uint32_t btn_press_ms = 0; /* timestamp of when press started */
 
-  while (1) {
+  while (1)
+  {
     uart_cli_poll();
     osDelay(5); /* 5ms poll interval */
 
     /* ── Re-zero button poll (PA0, active-low, 50ms debounce) ── */
     uint8_t btn_now = (uint8_t)HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
 
-    if (btn_prev == 1 && btn_now == 0) {
+    if (btn_prev == 1 && btn_now == 0)
+    {
       /* Falling edge: button just pressed */
       btn_press_ms = HAL_GetTick();
-    } else if (btn_prev == 0 && btn_now == 1) {
+    }
+    else if (btn_prev == 0 && btn_now == 1)
+    {
       /* Rising edge: button released */
       uint32_t held_ms = HAL_GetTick() - btn_press_ms;
-      if (held_ms >= 50U && held_ms < 2000U) {
+      if (held_ms >= 50U && held_ms < 2000U)
+      {
         /* Valid short press (50ms–2000ms) → request re-zero */
         g_rezero_requested = 1;
       }
@@ -877,7 +895,8 @@ static void cli_task_fn(void *arg) {
     btn_prev = btn_now;
 
 #if STACK_TUNING_MODE
-    if (++tick_count >= 200) {
+    if (++tick_count >= 200)
+    {
       tick_count = 0;
       UBaseType_t hwm = uxTaskGetStackHighWaterMark(NULL);
       char buf[128];
@@ -897,10 +916,12 @@ static void cli_task_fn(void *arg) {
  * @retval None
  */
 /* USER CODE END Header_StartDefaultTask */
-void StartDefaultTask(void *argument) {
+void StartDefaultTask(void *argument)
+{
   /* USER CODE BEGIN 5 */
   /* Infinite loop */
-  for (;;) {
+  for (;;)
+  {
     osDelay(1);
   }
   /* USER CODE END 5 */
@@ -914,15 +935,18 @@ void StartDefaultTask(void *argument) {
  * @param  htim : TIM handle
  * @retval None
  */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
   /* USER CODE BEGIN Callback 0 */
-  if (htim->Instance == TIM2) {
+  if (htim->Instance == TIM2)
+  {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     vTaskNotifyGiveFromISR(imuTaskHandle, &xHigherPriorityTaskWoken);
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
   }
   /* USER CODE END Callback 0 */
-  if (htim->Instance == TIM1) {
+  if (htim->Instance == TIM1)
+  {
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
@@ -934,11 +958,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
  * @brief  This function is executed in case of error occurrence.
  * @retval None
  */
-void Error_Handler(void) {
+void Error_Handler(void)
+{
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1) {
+  while (1)
+  {
   }
   /* USER CODE END Error_Handler_Debug */
 }
@@ -950,7 +976,8 @@ void Error_Handler(void) {
  * @param  line: assert_param error line source number
  * @retval None
  */
-void assert_failed(uint8_t *file, uint32_t line) {
+void assert_failed(uint8_t *file, uint32_t line)
+{
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line
      number, ex: printf("Wrong parameters value: file %s on line %d\r\n", file,
@@ -968,7 +995,8 @@ void assert_failed(uint8_t *file, uint32_t line) {
  *
  * Speed: 400 kHz (Fast-Mode). The SSD1306 supports up to 400 kHz.
  */
-static void MX_I2C2_Init(void) {
+static void MX_I2C2_Init(void)
+{
   /* Enable clocks */
   __HAL_RCC_I2C2_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
@@ -989,7 +1017,7 @@ static void MX_I2C2_Init(void) {
 
   /* Configure I2C2 peripheral */
   hi2c2.Instance = I2C2;
-  hi2c2.Init.ClockSpeed = 400000U; /* 400 kHz Fast-Mode */
+  hi2c2.Init.ClockSpeed = 100000U; /* 400 kHz Fast-Mode */
   hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c2.Init.OwnAddress1 = 0;
   hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
@@ -998,7 +1026,8 @@ static void MX_I2C2_Init(void) {
   hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
 
-  if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
+  {
     Error_Handler();
   }
 }

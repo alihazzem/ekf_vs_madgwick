@@ -40,10 +40,14 @@ typedef enum {
  * Kept small (20 bytes) so it copies in one word-aligned burst.
  */
 typedef struct {
-    float          pitch;           /**< Pitch angle in degrees (relative)  */
-    float          roll;            /**< Roll angle in degrees  (relative)  */
-    uint32_t       servo_pitch_us;  /**< Pitch servo pulse width in µs      */
-    uint32_t       servo_roll_us;   /**< Roll servo pulse width in µs       */
+    float          pitch_0;           /**< IMU 0: Pitch angle in degrees (relative)  */
+    float          roll_0;            /**< IMU 0: Roll angle in degrees  (relative)  */
+    uint32_t       servo_pitch_us_0;  /**< IMU 0: Pitch servo pulse width in µs      */
+    uint32_t       servo_roll_us_0;   /**< IMU 0: Roll servo pulse width in µs       */
+    float          pitch_1;           /**< IMU 1: Pitch angle in degrees (relative)  */
+    float          roll_1;            /**< IMU 1: Roll angle in degrees  (relative)  */
+    uint32_t       servo_pitch_us_1;  /**< IMU 1: Pitch servo pulse width in µs      */
+    uint32_t       servo_roll_us_1;   /**< IMU 1: Roll servo pulse width in µs       */
     SystemStatus_t status;          /**< Current system status              */
 } SystemState_t;
 

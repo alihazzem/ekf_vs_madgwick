@@ -377,21 +377,36 @@ bool connectToMyo() {
   BLERemoteCharacteristic* commandChar = controlService->getCharacteristic(COMMAND_UUID);
   if (!commandChar) return false;
 
+  // Send the command to enable EMG (and IMU if configured)
   uint8_t cmdEMG[] = {0x01, 0x03, 0x03, 0x01, 0x01};
   commandChar->writeValue(cmdEMG, sizeof(cmdEMG));
 
+  // Connect IMU if available
   BLERemoteService* imuService = client->getService(IMU_SERVICE_UUID);
   if (imuService) {
     BLERemoteCharacteristic* imuChar = imuService->getCharacteristic(IMU_DATA_UUID);
-    if (imuChar) imuChar->registerForNotify(imuCallback);
+    if (imuChar && imuChar->canNotify()) {
+        imuChar->registerForNotify(imuCallback);
+    }
   }
 
+  // Connect EMG Service
   BLERemoteService* emgService = client->getService(EMG_SERVICE_UUID);
   if (!emgService) return false;
 
-  BLERemoteCharacteristic* emgChar = emgService->getCharacteristic(emgCharUUIDs[0]);
-  if (!emgChar) return false;
-  emgChar->registerForNotify(emgCallback);
+  // ── FIX: Loop through and subscribe to ALL 4 EMG characteristics ───────────
+  // This restores the full 200 Hz sampling rate by catching every data packet.
+  bool atLeastOneEmgConnected = false;
+  for (int i = 0; i < 4; i++) {
+    BLERemoteCharacteristic* emgChar = emgService->getCharacteristic(emgCharUUIDs[i]);
+    if (emgChar && emgChar->canNotify()) {
+      emgChar->registerForNotify(emgCallback);
+      atLeastOneEmgConnected = true;
+    }
+  }
+
+  // If we couldn't connect to ANY of the EMG characteristics, abort.
+  if (!atLeastOneEmgConnected) return false;
 
   lastDataTime = millis();
   resetCalibration(); // safe — called from loop() context

@@ -160,9 +160,10 @@ void app_cli_handle_line(const char *line)
     uart_cli_send("  MPU WHOAMI\r\n");
     uart_cli_send("  MPU INIT\r\n");
     uart_cli_send("  MPU STREAM ON|OFF\r\n");
+    uart_cli_send("  MPU CAL GYRO <ms>\r\n");
+    uart_cli_send("  MPU CAL ACCEL <ms>\r\n");
     uart_cli_send("  MAD RESET\r\n");
     uart_cli_send("  EKF RESET\r\n");
-    uart_cli_send("  MPU CAL GYRO <ms>\r\n");
     return;
   }
 
@@ -203,39 +204,38 @@ void app_cli_handle_line(const char *line)
   if (strcmp(argv[0], "MPU") == 0)
   {
     extern I2C_HandleTypeDef hi2c1;
-#if !SENSOR_GY91
-    /* cfg is shared across MPU CFG / MPU INIT on the legacy path only.
-     * On the GY91 path each handler declares its own local cfg.         */
-    static mpu6050_cfg_t cfg;
-#endif
 
     if (argc >= 2 && strcmp(argv[1], "WHOAMI") == 0)
     {
 #if SENSOR_GY91
-      uint8_t id = 0;
-      xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
-      if (mpu9255_whoami(&hi2c1, MPU9255_ADDR_7BIT, &id) != MPU9255_OK)
+      for (int i = 0; i < NUM_IMUS; i++)
       {
+        uint8_t id = 0;
+        uint8_t addr = (i == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
+        xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
+        mpu9255_status_t st = mpu9255_whoami(&hi2c1, addr, &id);
         xSemaphoreGive(g_i2c_mutex);
-        uart_cli_send("ERR: whoami\r\n");
-        return;
+        if (st == MPU9255_OK)
+          uart_cli_sendf("IMU[%d] addr=0x%02X WHO_AM_I=0x%02X (%s)\r\n",
+                         i, addr, id,
+                         (id == MPU9255_WHOAMI_VAL) ? "MPU-9255" : (id == MPU9250_WHOAMI_VAL) ? "MPU-9250"
+                                                                                               : "unknown");
+        else
+          uart_cli_sendf("IMU[%d] addr=0x%02X ERR: whoami\r\n", i, addr);
       }
-      xSemaphoreGive(g_i2c_mutex);
-      uart_cli_sendf("MPU addr=0x%02X WHO_AM_I=0x%02X (%s)\r\n",
-                     MPU9255_ADDR_7BIT, id,
-                     (id == MPU9255_WHOAMI_VAL) ? "MPU-9255" : (id == MPU9250_WHOAMI_VAL) ? "MPU-9250"
-                                                                                          : "unknown");
 #else
-      uint8_t id = 0;
-      xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
-      if (mpu6050_whoami(&hi2c1, MPU6050_ADDR7_DEFAULT, &id) != MPU6050_OK)
+      for (int i = 0; i < NUM_IMUS; i++)
       {
+        uint8_t id = 0;
+        uint8_t addr = (i == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
+        xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
+        mpu6050_status_t st = mpu6050_whoami(&hi2c1, addr, &id);
         xSemaphoreGive(g_i2c_mutex);
-        uart_cli_send("ERR: whoami\r\n");
-        return;
+        if (st == MPU6050_OK)
+          uart_cli_sendf("IMU[%d] addr=0x%02X WHO_AM_I=0x%02X\r\n", i, addr, id);
+        else
+          uart_cli_sendf("IMU[%d] addr=0x%02X ERR: whoami\r\n", i, addr);
       }
-      xSemaphoreGive(g_i2c_mutex);
-      uart_cli_sendf("MPU addr=0x%02X WHO_AM_I=0x%02X\r\n", MPU6050_ADDR7_DEFAULT, id);
 #endif
       return;
     }
@@ -243,56 +243,63 @@ void app_cli_handle_line(const char *line)
     if (argc >= 2 && strcmp(argv[1], "INIT") == 0)
     {
 #if SENSOR_GY91
-      mpu9255_cfg_t cfg;
-      xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
-      mpu9255_status_t st = mpu9255_init_200hz(&hi2c1, MPU9255_ADDR_7BIT, &cfg);
+      for (int i = 0; i < NUM_IMUS; i++)
+      {
+        uint8_t addr = (i == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
+        mpu9255_cfg_t cfg;
+        xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
+        mpu9255_status_t st = mpu9255_init_200hz(&hi2c1, addr, &cfg);
 
-      if (st == MPU9255_ERR_ID)
-      {
-        xSemaphoreGive(g_i2c_mutex);
+        if (st == MPU9255_ERR_ID)
+        {
+          xSemaphoreGive(g_i2c_mutex);
 #if MPU92XX_VARIANT == MPU92XX_VARIANT_9255
-        uart_cli_send("ERR: wrong WHO_AM_I (expected MPU-9255)\r\n");
+          uart_cli_sendf("IMU[%d] addr=0x%02X ERR: wrong WHO_AM_I (expected MPU-9255)\r\n", i, addr);
 #elif MPU92XX_VARIANT == MPU92XX_VARIANT_9250
-        uart_cli_send("ERR: wrong WHO_AM_I (expected MPU-9250)\r\n");
+          uart_cli_sendf("IMU[%d] addr=0x%02X ERR: wrong WHO_AM_I (expected MPU-9250)\r\n", i, addr);
 #else
-        uart_cli_send("ERR: wrong WHO_AM_I (not MPU-9255/9250?)\r\n");
+          uart_cli_sendf("IMU[%d] addr=0x%02X ERR: wrong WHO_AM_I (not MPU-9255/9250?)\r\n", i, addr);
 #endif
-        return;
-      }
-      if (st != MPU9255_OK)
-      {
+          continue;
+        }
+        if (st != MPU9255_OK)
+        {
+          xSemaphoreGive(g_i2c_mutex);
+          uart_cli_sendf("IMU[%d] addr=0x%02X ERR: mpu9255 init failed\r\n", i, addr);
+          continue;
+        }
+        /* Enable bypass to expose AK8963 on the I2C bus */
+        if (mpu9255_enable_bypass(&hi2c1, addr) != MPU9255_OK)
+        {
+          xSemaphoreGive(g_i2c_mutex);
+          uart_cli_sendf("IMU[%d] addr=0x%02X ERR: bypass enable failed\r\n", i, addr);
+          continue;
+        }
         xSemaphoreGive(g_i2c_mutex);
-        uart_cli_send("ERR: mpu9255 init failed\r\n");
-        return;
+        const char *name = (cfg.whoami == MPU9255_WHOAMI_VAL) ? "MPU-9255" : (cfg.whoami == MPU9250_WHOAMI_VAL) ? "MPU-9250"
+                                                                                                                : "unknown";
+        uart_cli_sendf("IMU[%d] addr=0x%02X init ok (%s, bypass enabled)\r\n", i, addr, name);
       }
-      /* Enable bypass to expose AK8963 on the I2C bus */
-      if (mpu9255_enable_bypass(&hi2c1, MPU9255_ADDR_7BIT) != MPU9255_OK)
-      {
-        xSemaphoreGive(g_i2c_mutex);
-        uart_cli_send("ERR: bypass enable failed\r\n");
-        return;
-      }
-      xSemaphoreGive(g_i2c_mutex);
-      const char *name = (cfg.whoami == MPU9255_WHOAMI_VAL) ? "MPU-9255" : (cfg.whoami == MPU9250_WHOAMI_VAL) ? "MPU-9250"
-                                                                                                               : "unknown";
-      uart_cli_sendf("mpu init ok (%s, bypass enabled)\r\n", name);
 #else
-      xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
-      mpu6050_status_t st = mpu6050_init_200hz(&hi2c1, MPU6050_ADDR7_DEFAULT, &cfg);
-      if (st == MPU6050_ERR_ID)
+      for (int i = 0; i < NUM_IMUS; i++)
       {
+        uint8_t addr = (i == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
+        mpu6050_cfg_t cfg;
+        xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
+        mpu6050_status_t st = mpu6050_init_200hz(&hi2c1, addr, &cfg);
         xSemaphoreGive(g_i2c_mutex);
-        uart_cli_send("ERR: wrong WHO_AM_I (not MPU6050?)\r\n");
-        return;
+        if (st == MPU6050_ERR_ID)
+        {
+          uart_cli_sendf("IMU[%d] addr=0x%02X ERR: wrong WHO_AM_I (not MPU6050?)\r\n", i, addr);
+          continue;
+        }
+        if (st != MPU6050_OK)
+        {
+          uart_cli_sendf("IMU[%d] addr=0x%02X ERR: init failed\r\n", i, addr);
+          continue;
+        }
+        uart_cli_sendf("IMU[%d] addr=0x%02X init ok\r\n", i, addr);
       }
-      if (st != MPU6050_OK)
-      {
-        xSemaphoreGive(g_i2c_mutex);
-        uart_cli_send("ERR: init failed\r\n");
-        return;
-      }
-      xSemaphoreGive(g_i2c_mutex);
-      uart_cli_send("mpu init ok\r\n");
 #endif
       return;
     }
@@ -326,9 +333,37 @@ void app_cli_handle_line(const char *line)
       uart_cli_send("Calibrating gyro... keep still\r\n");
       if (imu_app_cal_gyro(ms))
       {
-        int16_t x, y, z;
-        imu_app_cal_get(&x, &y, &z);
-        uart_cli_sendf("done. offsets=(%d %d %d)\r\n", x, y, z);
+        for (int i = 0; i < NUM_IMUS; i++)
+        {
+          int16_t x, y, z;
+          imu_app_cal_get((uint8_t)i, &x, &y, &z);
+          uart_cli_sendf("IMU[%d] gyro_offsets=(%d %d %d)\r\n", i, x, y, z);
+        }
+      }
+      else
+      {
+        uart_cli_send("ERR: calibration failed\r\n");
+      }
+      return;
+    }
+
+    if (argc >= 4 && strcmp(argv[1], "CAL") == 0 && strcmp(argv[2], "ACCEL") == 0)
+    {
+      uint32_t ms = parse_u32_auto(argv[3]);
+      if (ms == 0 || ms > 60000)
+      {
+        uart_cli_send("ERR: ms out of range\r\n");
+        return;
+      }
+      uart_cli_send("Calibrating accel... hold board flat and still\r\n");
+      if (imu_app_cal_accel(ms))
+      {
+        for (int i = 0; i < NUM_IMUS; i++)
+        {
+          int16_t ax, ay, az;
+          imu_app_get_accel_bias((uint8_t)i, &ax, &ay, &az);
+          uart_cli_sendf("IMU[%d] accel_offsets=(%d %d %d)\r\n", i, ax, ay, az);
+        }
       }
       else
       {
@@ -345,7 +380,7 @@ void app_cli_handle_line(const char *line)
       return;
     }
 
-    uart_cli_send("usage: MPU WHOAMI | INIT | STREAM ON|OFF | PRINT <N> | CAL GYRO <ms>\r\n");
+    uart_cli_send("usage: MPU WHOAMI | INIT | STREAM ON|OFF | PRINT <N> | CAL GYRO <ms> | CAL ACCEL <ms>\r\n");
     return;
   }
 

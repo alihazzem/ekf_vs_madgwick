@@ -17,6 +17,7 @@
 #define INC_FILTERS_EKF_H_
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -60,6 +61,11 @@ extern "C"
         float accel_reject_max_g; /* above this -> skip update entirely */
         float accel_sane_timer_s;
         float accel_sane_timeout_s;
+
+        /* Per-instance symmetry enforcement counters (not static — each EKF
+         * instance must track its own counter to avoid cross-IMU coupling). */
+        uint32_t sym_ctr;
+        uint32_t sym_ctr_mag;
 
     } ekf7_t;
 

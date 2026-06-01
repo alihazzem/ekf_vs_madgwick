@@ -25,8 +25,8 @@ mpu6050_status_t mpu6050_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6
   uint8_t id = 0;
   if (mpu6050_whoami(hi2c, addr7, &id) != MPU6050_OK) return MPU6050_ERR_I2C;
 
-  // MPU6050 WHO_AM_I is typically 0x68
-  if (id != 0x68u) return MPU6050_ERR_ID;
+  // MPU6050 WHO_AM_I is 0x68. MPU6500 is 0x70 or 0x71.
+  if (id != 0x68u && id != 0x70u && id != 0x71u && id != 0x75u) return MPU6050_ERR_ID;
 
   // 2) Wake up + set clock source (PWR_MGMT_1)
   //    0x01: SLEEP=0, CLKSEL=1 (PLL with gyro X)

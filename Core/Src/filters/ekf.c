@@ -292,6 +292,9 @@ void ekf7_init(ekf7_t *e,
     e->accel_reject_min_g = 0.3f;
     e->accel_reject_max_g = 4.0f;
 
+    e->sym_ctr = 0;
+    e->sym_ctr_mag = 0;
+
     ekf7_reset(e);
 }
 
@@ -310,6 +313,9 @@ void ekf7_reset(ekf7_t *e)
 
     e->mag_ref_valid = false;
     e->accel_sane_timer_s = 0.0f;
+
+    e->sym_ctr = 0;
+    e->sym_ctr_mag = 0;
 
     memset(e->P, 0, sizeof(e->P));
     for (int i = 0; i < 7; i++)
@@ -695,8 +701,7 @@ void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g, float dt_s
     ekf7_cov_update_joseph(e, H, r_val);
 
     /* Periodic symmetry enforcement every 64 accel updates (~0.64 s at 100 Hz) */
-    static uint32_t s_sym_ctr = 0;
-    if ((++s_sym_ctr & 0x3Fu) == 0u)
+    if ((++e->sym_ctr & 0x3Fu) == 0u)
     {
         for (int i = 0; i < 7; i++)
             for (int j = i + 1; j < 7; j++)
@@ -882,8 +887,7 @@ void ekf7_update_mag(ekf7_t *e, float mx, float my, float mz)
     ekf7_cov_update_joseph(e, H, r_val);
 
     /* Periodic symmetry enforcement every 64 mag updates */
-    static uint32_t s_sym_ctr_mag = 0;
-    if ((++s_sym_ctr_mag & 0x3Fu) == 0u)
+    if ((++e->sym_ctr_mag & 0x3Fu) == 0u)
     {
         for (int i = 0; i < 7; i++)
             for (int j = i + 1; j < 7; j++)

@@ -56,21 +56,28 @@ osMessageQueueId_t displayQueueHandle = NULL;
  *   Page 0:  ── Status line ─────────────────────────────────────────────
  *            "CALIBRATING" or "RUNNING"
  *
- *   Page 2:  ── Left column (angles) ─────────────────────────────────────
- *            "P: +12.3 d"
+ *   Page 1:  ── Column headers ───────────────────────────────────────────
+ *            "IMU0"                  "IMU1"
  *
- *   Page 4:  "R: -45.6 d"
+ *   Page 2:  ── Pitch (both IMUs) ────────────────────────────────────────
+ *            "0P:+12.3"            "1P:-5.2"
  *
- *   Page 2:  ── Right column (servo µs) (starting at col 70) ─────────────
- *            "PS:1567us"
+ *   Page 3:  ── Roll (both IMUs) ─────────────────────────────────────────
+ *            "0R:+45.6"            "1R:-30.1"
  *
- *   Page 4:  "RS:2100us"
+ *   Page 4:  ── Pitch servo deg (both IMUs) ──────────────────────────────
+ *            "0PS:+10d"            "1PS:-5d"
+ *
+ *   Page 5:  ── Roll servo deg (both IMUs) ───────────────────────────────
+ *            "0RS:+15d"            "1RS:-10d"
  */
-#define COL_LEFT   0
-#define COL_RIGHT  70
+#define COL_LEFT    0
+#define COL_RIGHT   64
 #define PAGE_STATUS 0
 #define PAGE_PITCH  2
-#define PAGE_ROLL   4
+#define PAGE_ROLL   3
+#define PAGE_SERVO_P 4
+#define PAGE_SERVO_R 5
 
 /* ── Task implementation ─────────────────────────────────────────────────── */
 void display_task_fn(void *arg)
@@ -80,7 +87,7 @@ void display_task_fn(void *arg)
     /* Initialize the OLED over the dedicated hi2c2 bus */
     ssd1306_init(&hi2c2);
     ssd1306_clear();
-    ssd1306_puts(0, 0, "IMU GIMBAL");
+    ssd1306_puts(0, 0, "DUAL IMU GIMBAL");
     ssd1306_puts(0, 2, "Calibrating...");
     ssd1306_flush(&hi2c2);
 
@@ -107,49 +114,81 @@ void display_task_fn(void *arg)
             ssd1306_puts(COL_LEFT, PAGE_STATUS, "   IMU GIMBAL   ");
         }
 
-        /* Row 2 (left): Pitch angle
-         * newlib-nano strips float printf, so we format manually:
-         * e.g. -12.3 -> sign='-', whole=12, frac=3  */
+        /* Row 1: Column headers */
+        ssd1306_puts(COL_LEFT,  1, "IMU0");
+        ssd1306_puts(COL_RIGHT, 1, "IMU1");
+
+        /* Row 2 (page 2): Pitch — IMU0 left, IMU1 right */
         {
-            float v = state.pitch;
+            float v = state.pitch_0;
             char sign = (v < 0.0f) ? '-' : '+';
             int whole = (int)(v < 0.0f ? -v : v);
             int frac  = (int)(((v < 0.0f ? -v : v) - (float)whole) * 10.0f);
-            snprintf(line, sizeof(line), "P:%c%d.%d", sign, whole, frac);
+            snprintf(line, sizeof(line), "0P:%c%d.%d", sign, whole, frac);
         }
         ssd1306_puts(COL_LEFT, PAGE_PITCH, line);
 
-        /* Row 4 (left): Roll angle */
         {
-            float v = state.roll;
+            float v = state.pitch_1;
             char sign = (v < 0.0f) ? '-' : '+';
             int whole = (int)(v < 0.0f ? -v : v);
             int frac  = (int)(((v < 0.0f ? -v : v) - (float)whole) * 10.0f);
-            snprintf(line, sizeof(line), "R:%c%d.%d", sign, whole, frac);
-        }
-        ssd1306_puts(COL_LEFT, PAGE_ROLL, line);
-
-        /* Row 2 (right): Pitch servo in degrees (display only, not used for control)
-         * Formula: deg = (us - 1500) * 180 / 2000
-         * Range: 1167us=-30d, 1500us=0d, 1833us=+30d */
-        {
-            int deg = ((int)state.servo_pitch_us - 1500) * 180 / 2000;
-            char sign = (deg < 0) ? '-' : '+';
-            if (deg < 0) deg = -deg;
-            snprintf(line, sizeof(line), "PS:%c%dd", sign, deg);
+            snprintf(line, sizeof(line), "1P:%c%d.%d", sign, whole, frac);
         }
         ssd1306_puts(COL_RIGHT, PAGE_PITCH, line);
 
-        /* Row 4 (right): Roll servo in degrees (display only, not used for control)
-         * Formula: deg = (us - 1500) * 180 / 2000
-         * Range: 500us=-90d, 1500us=0d, 2500us=+90d */
+        /* Row 3 (page 3): Roll — IMU0 left, IMU1 right */
         {
-            int deg = ((int)state.servo_roll_us - 1500) * 180 / 2000;
-            char sign = (deg < 0) ? '-' : '+';
-            if (deg < 0) deg = -deg;
-            snprintf(line, sizeof(line), "RS:%c%dd", sign, deg);
+            float v = state.roll_0;
+            char sign = (v < 0.0f) ? '-' : '+';
+            int whole = (int)(v < 0.0f ? -v : v);
+            int frac  = (int)(((v < 0.0f ? -v : v) - (float)whole) * 10.0f);
+            snprintf(line, sizeof(line), "0R:%c%d.%d", sign, whole, frac);
+        }
+        ssd1306_puts(COL_LEFT, PAGE_ROLL, line);
+
+        {
+            float v = state.roll_1;
+            char sign = (v < 0.0f) ? '-' : '+';
+            int whole = (int)(v < 0.0f ? -v : v);
+            int frac  = (int)(((v < 0.0f ? -v : v) - (float)whole) * 10.0f);
+            snprintf(line, sizeof(line), "1R:%c%d.%d", sign, whole, frac);
         }
         ssd1306_puts(COL_RIGHT, PAGE_ROLL, line);
+
+        /* Row 4 (page 4): Pitch servo degrees — IMU0 left, IMU1 right */
+        {
+            int deg = ((int)state.servo_pitch_us_0 - 1500) * 180 / 2000;
+            char sign = (deg < 0) ? '-' : '+';
+            if (deg < 0) deg = -deg;
+            snprintf(line, sizeof(line), "0PS:%c%dd", sign, deg);
+        }
+        ssd1306_puts(COL_LEFT, PAGE_SERVO_P, line);
+
+        {
+            int deg = ((int)state.servo_pitch_us_1 - 1500) * 180 / 2000;
+            char sign = (deg < 0) ? '-' : '+';
+            if (deg < 0) deg = -deg;
+            snprintf(line, sizeof(line), "1PS:%c%dd", sign, deg);
+        }
+        ssd1306_puts(COL_RIGHT, PAGE_SERVO_P, line);
+
+        /* Row 5 (page 5): Roll servo degrees — IMU0 left, IMU1 right */
+        {
+            int deg = ((int)state.servo_roll_us_0 - 1500) * 180 / 2000;
+            char sign = (deg < 0) ? '-' : '+';
+            if (deg < 0) deg = -deg;
+            snprintf(line, sizeof(line), "0RS:%c%dd", sign, deg);
+        }
+        ssd1306_puts(COL_LEFT, PAGE_SERVO_R, line);
+
+        {
+            int deg = ((int)state.servo_roll_us_1 - 1500) * 180 / 2000;
+            char sign = (deg < 0) ? '-' : '+';
+            if (deg < 0) deg = -deg;
+            snprintf(line, sizeof(line), "1RS:%c%dd", sign, deg);
+        }
+        ssd1306_puts(COL_RIGHT, PAGE_SERVO_R, line);
 
         /* Push framebuffer to OLED */
         ssd1306_flush(&hi2c2);

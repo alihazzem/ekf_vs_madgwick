@@ -63,39 +63,44 @@ float imu_app_get_rate_hz(void);
 uint32_t imu_app_get_rate_mhz(void);
 
 // --- Madgwick ---
-bool imu_app_get_madgwick(Attitude_t *out);
+bool imu_app_get_madgwick(uint8_t imu_idx, Attitude_t *out);
 void imu_app_madgwick_reset(void);
 void imu_app_madgwick_set_beta(float beta);
-float imu_app_madgwick_get_beta(void);
-uint32_t imu_app_mad_last_us(void);
+float imu_app_madgwick_get_beta(uint8_t imu_idx);
+uint32_t imu_app_mad_last_us(uint8_t imu_idx);
 
 // --- EKF ---
-bool imu_app_get_ekf(Attitude_t *out);
+bool imu_app_get_ekf(uint8_t imu_idx, Attitude_t *out);
 void imu_app_ekf_reset(void);
 void imu_app_ekf_set_noise(float sigma_gyro, float sigma_bias,
                            float sigma_accel, float sigma_mag, float r_adapt_k);
-float imu_app_ekf_trace_p(void);
-void imu_app_ekf_get_bias(float *bx, float *by, float *bz);
-uint32_t imu_app_ekf_last_us(void);
+float imu_app_ekf_trace_p(uint8_t imu_idx);
+void imu_app_ekf_get_bias(uint8_t imu_idx, float *bx, float *by, float *bz);
+uint32_t imu_app_ekf_last_us(uint8_t imu_idx);
 
 // --- Gyro calibration (raw LSB offsets) ---
 void imu_app_cal_clear(void);
-bool imu_app_cal_get(int16_t *gx_off, int16_t *gy_off, int16_t *gz_off);
+bool imu_app_cal_get(uint8_t imu_idx, int16_t *gx_off, int16_t *gy_off, int16_t *gz_off);
 bool imu_app_cal_gyro(uint32_t duration_ms); // blocking calibration
 
+// --- Accel calibration (raw LSB offsets, per-IMU) ---
+void imu_app_get_accel_bias(uint8_t imu_idx, int16_t *ax, int16_t *ay, int16_t *az);
+void imu_app_set_accel_bias(uint8_t imu_idx, int16_t ax, int16_t ay, int16_t az);
+bool imu_app_cal_accel(uint32_t duration_ms); // blocking calibration
+
 // --- Raw Data ---
-void imu_app_get_accel_g(float *ax, float *ay, float *az);
+void imu_app_get_accel_g(uint8_t imu_idx, float *ax, float *ay, float *az);
 
 #if SENSOR_GY91
 /* Last AK8963 raw sample — valid=1 means fresh data was available. */
-void imu_app_get_mag_raw(ak8963_raw_t *out);
+void imu_app_get_mag_raw(uint8_t imu_idx, ak8963_raw_t *out);
 /* AK8963 sensitivity-adjustment coefficients (set once at init). */
-void imu_app_get_ak_cfg(ak8963_cfg_t *out);
+void imu_app_get_ak_cfg(uint8_t imu_idx, ak8963_cfg_t *out);
 /* Body-frame mag (µT), after remap + ASA, before hard/soft-iron correction. */
-void imu_app_get_mag_body(float *mx_ut, float *my_ut, float *mz_ut,
+void imu_app_get_mag_body(uint8_t imu_idx, float *mx_ut, float *my_ut, float *mz_ut,
                           float *norm,  uint8_t *valid);
 /* Calibrated body-frame mag (µT): hard + soft iron applied from app_config.h. */
-void imu_app_get_mag_cal(float *mx_ut, float *my_ut, float *mz_ut,
+void imu_app_get_mag_cal(uint8_t imu_idx, float *mx_ut, float *my_ut, float *mz_ut,
                          float *norm,  uint8_t *valid);
 /* Enable/disable M, streaming for offline ellipsoid calibration capture.
  * When enabled, also ensures the main poll loop is running.              */

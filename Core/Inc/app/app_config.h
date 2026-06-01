@@ -6,7 +6,7 @@
  * 0 = legacy MPU-6050 (accel/gyro only, no magnetometer).
  * BMP280 on the GY-91 board is intentionally ignored in both cases.
  */
-#define SENSOR_GY91 1
+#define SENSOR_GY91 0
 
 /* ====== MPU-92xx SETTINGS (active when SENSOR_GY91 = 1) ====== */
 #define MPU9255_ADDR_7BIT 0x68 /* SAO/SDO low → 0x68, high → 0x69 */
@@ -36,18 +36,18 @@
 #define MADGWICK_BETA 1.0f       // final/steady-state beta (increased for better tracking)
 #define MADGWICK_BETA_START 0.5f // initial beta for fast convergence
 #define MADGWICK_BETA_DECAY_S \
-  2.0f                     // seconds to ramp from BETA_START down to BETA
-#define MADGWICK_ZETA 0.0f // gyro bias gain; disabled to prevent divergence
-#define MADGWICK_BETA_MOTION_K 5.0f  // motion-adaptive k: aggressively reduces beta during dynamic motion
-#define MADGWICK_BETA_MIN 0.0f // beta floor — allows pure gyro integration during violent motion
+  2.0f                              // seconds to ramp from BETA_START down to BETA
+#define MADGWICK_ZETA 0.0f          // gyro bias gain; disabled to prevent divergence
+#define MADGWICK_BETA_MOTION_K 5.0f // motion-adaptive k: aggressively reduces beta during dynamic motion
+#define MADGWICK_BETA_MIN 0.0f      // beta floor — allows pure gyro integration during violent motion
 
 /* ====== EKF PARAMS ======
  * Physical noise densities from MPU6050 datasheet, conservative starting
  * values. Tune at runtime with: EKF TUNE <sigma_gyro> <sigma_bias>
  * <sigma_accel> <sigma_mag> <r_adapt_k>
  */
-#define EKF_SIGMA_GYRO 0.002f      /* gyro noise density  rad/s/sqrt(Hz)  */
-#define EKF_SIGMA_BIAS 6.3e-5f      /* bias random-walk    rad/s^2/sqrt(Hz) */
+#define EKF_SIGMA_GYRO 0.002f     /* gyro noise density  rad/s/sqrt(Hz)  */
+#define EKF_SIGMA_BIAS 6.3e-5f    /* bias random-walk    rad/s^2/sqrt(Hz) */
 #define EKF_SIGMA_ACCEL 0.05f     /* accel noise density g/sqrt(Hz)       */
 #define EKF_SIGMA_MAG 8.0f        /* stability-first mag trust (slower yaw lock) */
 #define EKF_R_ADAPT_K 1000.0f     /* adaptive-R steepness: heavily down-weights lateral accelerations */
@@ -65,25 +65,39 @@
 #define EKF_ACCEL_TIMEOUT_S 0.0f /* 0.0s = instant recovery when acceleration stops (no starvation) */
 
 /* ====== MPU6050 SETTINGS ====== */
-#define MPU6050_ADDR_7BIT 0x68 // AD0=0 -> 0x68, AD0=1 -> 0x69
+#define NUM_IMUS 2 // Set to 1 for single IMU, 2 for dual IMU setup
+#define MPU6050_ADDR_0 0x68 // IMU 0: AD0=GND → 0x68
+#define MPU6050_ADDR_1 0x69 // IMU 1: AD0=VCC → 0x69
 
 #define MADGWICK_ACCEL_REJECT_EN 1
-#define MADGWICK_ACCEL_MIN_G 0.3f /* reject if |a| < 0.8 g */
-#define MADGWICK_ACCEL_MAX_G 4.0f /* reject if |a| > 1.2 g */
+#define MADGWICK_ACCEL_MIN_G 0.3f /* reject if |a| < 0.3 g */
+#define MADGWICK_ACCEL_MAX_G 4.0f /* reject if |a| > 4.0 g */
 
 /* ====== ACCELEROMETER BIAS CALIBRATION ======
  * Measured per-axis zero-g offsets in raw LSB (±2 g range, 16384 LSB/g).
  * At flat rest the raw readings should be [0, 0, +16384]; subtract these
  * offsets to remove the DC bias before the scale conversion.
  *
- * To re-derive: place board FLAT AND STILL, capture ~500 samples, compute:
+ * To re-derive: place board FLAT AND STILL, then run via CLI:
+ *   MPU CAL ACCEL 3000
+ * The CLI prints per-IMU offsets — paste them into the macros below.
+ *
+ * IMU 0 (addr 0x68):
+ *   bias_x = mean(ax_raw)
+ *   bias_y = mean(ay_raw)
+ *   bias_z = mean(az_raw) - 16384
+ *
+ * IMU 1 (addr 0x69):
  *   bias_x = mean(ax_raw)
  *   bias_y = mean(ay_raw)
  *   bias_z = mean(az_raw) - 16384
  */
-#define ACCEL_BIAS_X (-1300) /* LSB, mean ax_raw when flat    */
-#define ACCEL_BIAS_Y (160)   /* LSB, mean ay_raw when flat    */
-#define ACCEL_BIAS_Z (10976) /* LSB, mean(az_raw) - 16384     */
+#define ACCEL_BIAS_X_0 (107) /* IMU 0: calibrated 2025-05-25 */
+#define ACCEL_BIAS_Y_0 (-967)
+#define ACCEL_BIAS_Z_0 (-408)
+#define ACCEL_BIAS_X_1 (-841) /* IMU 1: calibrated 2025-05-25 */
+#define ACCEL_BIAS_Y_1 (278)
+#define ACCEL_BIAS_Z_1 (-358)
 
 /* ====== SENSOR -> BODY AXIS REMAPPING ======
  * Derived from 3-pose calibration on the current board mounting.
@@ -94,17 +108,16 @@
  *  Outputs : ax_g, ay_g, az_g  — body-frame  accel   (g)
  *            wx,   wy,   wz    — body-frame  gyro    (rad/s)
  *
- * ====== ACCEL/GYRO → BODY AXIS REMAP ======
- * Orientation: 180-degree rotation around Roll (X-axis).
- * X remains unchanged. Y and Z are inverted.
+ * ====== ACCEL/GYRO -> BODY AXIS REMAP ======
+ * Default orientation: identity mapping (no sign flips or swaps).
  */
 #define REMAP_AX_G(ax_s, ay_s, az_s) ((ax_s))
-#define REMAP_AY_G(ax_s, ay_s, az_s) (-(ay_s))
-#define REMAP_AZ_G(ax_s, ay_s, az_s) (-(az_s))
+#define REMAP_AY_G(ax_s, ay_s, az_s) ((ay_s))
+#define REMAP_AZ_G(ax_s, ay_s, az_s) ((az_s))
 
 #define REMAP_WX(wx_s, wy_s, wz_s) ((wx_s))
-#define REMAP_WY(wx_s, wy_s, wz_s) (-(wy_s))
-#define REMAP_WZ(wx_s, wy_s, wz_s) (-(wz_s))
+#define REMAP_WY(wx_s, wy_s, wz_s) ((wy_s))
+#define REMAP_WZ(wx_s, wy_s, wz_s) ((wz_s))
 
 /* ====== AK8963 → BODY AXIS REMAP (active when SENSOR_GY91 = 1) ======
  * The AK8963 die inside the MPU-9255 is physically mounted at a different
@@ -114,14 +127,14 @@
  *   AK8963 +Y  ≡  accel/gyro +X   (swap X↔Y)
  *   AK8963 +Z  ≡  accel/gyro -Z   (negate Z)
  *
- * Applying the 180-degree roll rotation (invert Y and Z) to the base mapping:
- *   New Body X = Base Body X  = +(my_s)
- *   New Body Y = -Base Body Y = -(mx_s)
- *   New Body Z = -Base Body Z = -(-mz_s) = +(mz_s)
+ * With identity accel/gyro remap, the body-frame mapping is:
+ *   Body X = +(my_s)
+ *   Body Y = +(mx_s)
+ *   Body Z = -(mz_s)
  */
 #define REMAP_MX(mx_s, my_s, mz_s) (+(my_s))
-#define REMAP_MY(mx_s, my_s, mz_s) (-(mx_s))
-#define REMAP_MZ(mx_s, my_s, mz_s) (+(mz_s))
+#define REMAP_MY(mx_s, my_s, mz_s) (+(mx_s))
+#define REMAP_MZ(mx_s, my_s, mz_s) (-(mz_s))
 
 /* Scale factor: 0.15 µT per LSB in 16-bit mode (AK8963 datasheet Table 3) */
 #define AK8963_UT_PER_LSB 0.15f
@@ -150,6 +163,6 @@
 #define MAG_CAL_S33 0.9704f
 
 /* ====== EMG MOTOR FUSION ====== */
-#define EMG_SPEED_TIMEOUT_MS 500  /* stop motors if no valid EMG packet for 500 ms */
+#define EMG_SPEED_TIMEOUT_MS 500 /* stop motors if no valid EMG packet for 500 ms */
 
 #endif // APP_CONFIG_H
