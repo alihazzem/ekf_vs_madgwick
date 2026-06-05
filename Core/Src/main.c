@@ -37,6 +37,7 @@
 #include "drivers/emg_uart.h"
 #include "drivers/gripper.h"
 #include "utils/math3d.h"
+#include "app/perf_timer.h" /* DWT execution-time profiler */
 
 /* USER CODE END Includes */
 
@@ -48,6 +49,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define BYPASS_IMU_FILTER 0
+#define PITCH_SERVO_DIR -1.0f
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -102,6 +104,29 @@ static void cli_task_fn(void *arg);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+static inline float clampf(float v, float lo, float hi)
+{
+  return fminf(hi, fmaxf(lo, v));
+}
+
+static inline void quat_to_tilt_deg(const float q[4], float *pitch_deg, float *roll_deg)
+{
+  float gx = 2.0f * (q[1] * q[3] - q[0] * q[2]);
+  float gy = 2.0f * (q[0] * q[1] + q[2] * q[3]);
+  float gz = q[0] * q[0] - q[1] * q[1] - q[2] * q[2] + q[3] * q[3];
+
+  gx = clampf(gx, -1.0f, 1.0f);
+
+  if (pitch_deg)
+  {
+    *pitch_deg = atan2f(-gx, sqrtf(gy * gy + gz * gz)) * (180.0f / 3.14159265f);
+  }
+  if (roll_deg)
+  {
+    *roll_deg = atan2f(gy, gz) * (180.0f / 3.14159265f);
+  }
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -110,7 +135,6 @@ static void cli_task_fn(void *arg);
  */
 int main(void)
 {
-
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
@@ -144,10 +168,10 @@ int main(void)
   {
     __HAL_RCC_GPIOA_CLK_ENABLE();
     GPIO_InitTypeDef flash_cs = {0};
-    flash_cs.Pin       = GPIO_PIN_4;
-    flash_cs.Mode      = GPIO_MODE_OUTPUT_PP;
-    flash_cs.Pull      = GPIO_NOPULL;
-    flash_cs.Speed     = GPIO_SPEED_FREQ_LOW;
+    flash_cs.Pin = GPIO_PIN_4;
+    flash_cs.Mode = GPIO_MODE_OUTPUT_PP;
+    flash_cs.Pull = GPIO_NOPULL;
+    flash_cs.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOA, &flash_cs);
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
   }
@@ -513,7 +537,10 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
   if (huart->Instance == USART1)
   {
+    /* ── Thesis measurement 1: EMG UART parse time ── */
+    uint32_t _t_emg = perf_timer_start();
     emg_uart_on_rx_event(huart, Size);
+    perf_timer_stop(PERF_SLOT_EMG_PARSE, _t_emg);
   }
 }
 
@@ -596,9 +623,14 @@ static void imu_task_fn(void *arg)
 
   /* Capture q_ref = neutral pose */
   float q_ref[NUM_IMUS][4];
-  for (int i = 0; i < NUM_IMUS; i++) {
-    q_ref[i][0] = 1.0f; q_ref[i][1] = 0.0f; q_ref[i][2] = 0.0f; q_ref[i][3] = 0.0f;
-    if (imu_app_get_ekf(i, &ekf_att[i])) {
+  for (int i = 0; i < NUM_IMUS; i++)
+  {
+    q_ref[i][0] = 1.0f;
+    q_ref[i][1] = 0.0f;
+    q_ref[i][2] = 0.0f;
+    q_ref[i][3] = 0.0f;
+    if (imu_app_get_ekf(i, &ekf_att[i]))
+    {
       q_ref[i][0] = ekf_att[i].q0;
       q_ref[i][1] = ekf_att[i].q1;
       q_ref[i][2] = ekf_att[i].q2;
@@ -610,11 +642,13 @@ static void imu_task_fn(void *arg)
   float smoothed_pitch[NUM_IMUS];
   float smoothed_roll[NUM_IMUS];
 
-  for (int i = 0; i < NUM_IMUS; i++) {
+  for (int i = 0; i < NUM_IMUS; i++)
+  {
     smoothed_pitch[i] = 1500.0f;
     smoothed_roll[i] = 500.0f;
 
-    if (imu_app_get_ekf(i, &ekf_att[i])) {
+    if (imu_app_get_ekf(i, &ekf_att[i]))
+    {
 #if BYPASS_IMU_FILTER
       float ax, ay, az;
       imu_app_get_accel_g(i, &ax, &ay, &az);
@@ -626,15 +660,40 @@ static void imu_task_fn(void *arg)
       float q_delta_seed[4];
       math3d_quat_multiply(q_conj, q_now_seed, q_delta_seed);
 
-      float w = q_delta_seed[0], x = q_delta_seed[1], y = q_delta_seed[2], z = q_delta_seed[3];
+      /* Swing-Twist decomposition (twist axis = X / roll).
+       * q_delta = q_ref_conj * q_now  →  left-compose convention
+       * Therefore: q_delta = q_twist * q_swing
+       *            q_swing = q_twist_conj * q_delta  (left-multiply) */
+      float twist_seed_w = q_delta_seed[0];
+      float twist_seed_x = q_delta_seed[1];
+      float twist_seed_norm = sqrtf(twist_seed_w * twist_seed_w + twist_seed_x * twist_seed_x);
+      float q_twist_seed[4];
+      if (twist_seed_norm < 1e-6f)
+      {
+        q_twist_seed[0] = 1.0f;
+        q_twist_seed[1] = 0.0f;
+        q_twist_seed[2] = 0.0f;
+        q_twist_seed[3] = 0.0f;
+      }
+      else
+      {
+        q_twist_seed[0] = twist_seed_w / twist_seed_norm;
+        q_twist_seed[1] = twist_seed_x / twist_seed_norm;
+        q_twist_seed[2] = 0.0f;
+        q_twist_seed[3] = 0.0f;
+      }
+      float q_twist_seed_conj[4] = {q_twist_seed[0], -q_twist_seed[1], 0.0f, 0.0f};
+      float q_swing_seed[4];
+      math3d_quat_multiply(q_twist_seed_conj, q_delta_seed, q_swing_seed); /* q_swing = q_twist_conj * q_delta */
+
+      float w = q_swing_seed[0], x = q_swing_seed[1], y = q_swing_seed[2], z = q_swing_seed[3];
       float gx = 2.0f * (x * z - w * y);
-      float gy = 2.0f * (y * z + w * x);
-      float gz = w * w - x * x - y * y + z * z;
+      gx = clampf(gx, -1.0f, 1.0f);
       float _p = asinf(-gx) * (180.0f / 3.14159265f);
-      float _r = atan2f(gy, gz) * (180.0f / 3.14159265f);
+      float _r = 2.0f * atan2f(q_twist_seed[1], q_twist_seed[0]) * (180.0f / 3.14159265f);
 #endif
 
-      float pitch_us = 1500.0f + (_p * (2000.0f / 180.0f));
+      float pitch_us = 1500.0f + ((_p * PITCH_SERVO_DIR) * (2000.0f / 180.0f));
       float roll_us = 1500.0f + (_r * (2000.0f / 180.0f));
       smoothed_pitch[i] = fmaxf(1055.6f, fminf(1944.4f, pitch_us));
       smoothed_roll[i] = fmaxf(500.0f, fminf(2500.0f, roll_us));
@@ -644,7 +703,8 @@ static void imu_task_fn(void *arg)
   /* Pre-drive servos to seeded position and let them physically settle */
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)smoothed_pitch[0]);
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, (uint32_t)smoothed_roll[0]);
-  if (NUM_IMUS > 1) {
+  if (NUM_IMUS > 1)
+  {
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, (uint32_t)smoothed_pitch[1]);
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, (uint32_t)smoothed_roll[1]);
   }
@@ -669,8 +729,10 @@ static void imu_task_fn(void *arg)
     if (g_rezero_requested)
     {
       g_rezero_requested = 0; /* Clear FIRST to avoid double-trigger */
-      for (int i = 0; i < NUM_IMUS; i++) {
-        if (imu_app_get_ekf(i, &ekf_att[i])) {
+      for (int i = 0; i < NUM_IMUS; i++)
+      {
+        if (imu_app_get_ekf(i, &ekf_att[i]))
+        {
           q_ref[i][0] = ekf_att[i].q0;
           q_ref[i][1] = ekf_att[i].q1;
           q_ref[i][2] = ekf_att[i].q2;
@@ -685,7 +747,11 @@ static void imu_task_fn(void *arg)
     float final_pitch_deg[NUM_IMUS] = {0};
     float final_roll_deg[NUM_IMUS] = {0};
 
-    for (int i = 0; i < NUM_IMUS; i++) {
+    /* ── Thesis measurement 4: Tilt-only + deadzone + EMA block ── */
+    uint32_t _t_st = perf_timer_start();
+
+    for (int i = 0; i < NUM_IMUS; i++)
+    {
       if (imu_app_get_ekf(i, &ekf_att[i]))
       {
 #if BYPASS_IMU_FILTER
@@ -699,30 +765,13 @@ static void imu_task_fn(void *arg)
         float q_ref_conj[4] = {q_ref[i][0], -q_ref[i][1], -q_ref[i][2], -q_ref[i][3]};
         float q_delta[4];
         math3d_quat_multiply(q_ref_conj, q_now, q_delta);
-
-        float twist_raw_w = q_delta[0];
-        float twist_raw_x = q_delta[1];
-        float twist_norm = sqrtf(twist_raw_w * twist_raw_w + twist_raw_x * twist_raw_x);
-        float q_twist[4];
-        if (twist_norm < 1e-6f) {
-          q_twist[0] = 1.0f; q_twist[1] = 0.0f; q_twist[2] = 0.0f; q_twist[3] = 0.0f;
-        } else {
-          q_twist[0] = twist_raw_w / twist_norm;
-          q_twist[1] = twist_raw_x / twist_norm;
-          q_twist[2] = 0.0f; q_twist[3] = 0.0f;
-        }
-
-        float q_twist_conj[4] = {q_twist[0], -q_twist[1], 0.0f, 0.0f};
-        float q_swing[4];
-        math3d_quat_multiply(q_delta, q_twist_conj, q_swing);
-
-        float gx_swing = 2.0f * (q_swing[1] * q_swing[3] - q_swing[0] * q_swing[2]);
-        float pitch_deg = asinf(-gx_swing) * (180.0f / 3.14159265f);
-        float roll_deg = 2.0f * atan2f(q_twist[1], q_twist[0]) * (180.0f / 3.14159265f);
+        float pitch_deg = 0.0f;
+        float roll_deg = 0.0f;
+        quat_to_tilt_deg(q_delta, &pitch_deg, &roll_deg);
 #endif
 
-#define PITCH_DEADZONE_DEG 3.0f
-#define ROLL_DEADZONE_DEG 3.0f
+#define PITCH_DEADZONE_DEG 1.0f
+#define ROLL_DEADZONE_DEG 2.0f
 
         if (fabsf(pitch_deg) < PITCH_DEADZONE_DEG)
           pitch_deg = 0.0f;
@@ -739,58 +788,76 @@ static void imu_task_fn(void *arg)
         final_pitch_deg[i] = pitch_deg;
         final_roll_deg[i] = roll_deg;
 
-        float pitch_servo_us = 1500.0f + (pitch_deg * (2000.0f / 180.0f));
+        float pitch_servo_us = 1500.0f + ((pitch_deg * PITCH_SERVO_DIR) * (2000.0f / 180.0f));
         uint32_t ccr_pitch = (uint32_t)fmaxf(1055.6f, fminf(1944.4f, pitch_servo_us));
 
         float roll_servo_us = 1500.0f + (roll_deg * (2000.0f / 180.0f));
         uint32_t ccr_roll = (uint32_t)fmaxf(500.0f, fminf(2500.0f, roll_servo_us));
 
-#define SERVO_EMA_ALPHA 0.2f
-#define SERVO_DEADBAND_US 5.0f
+#define SERVO_EMA_ALPHA_PITCH 0.1f
+#define SERVO_EMA_ALPHA_ROLL 0.1f
+#define SERVO_DEADBAND_US_PITCH 2.0f
+#define SERVO_DEADBAND_US_ROLL 2.0f
 
         float err_pitch = (float)ccr_pitch - smoothed_pitch[i];
-        if (fabsf(err_pitch) > SERVO_DEADBAND_US) {
-          smoothed_pitch[i] += err_pitch * SERVO_EMA_ALPHA;
+        if (fabsf(err_pitch) > SERVO_DEADBAND_US_PITCH)
+        {
+          smoothed_pitch[i] += err_pitch * SERVO_EMA_ALPHA_PITCH;
         }
 
         float err_roll = (float)ccr_roll - smoothed_roll[i];
-        if (fabsf(err_roll) > SERVO_DEADBAND_US) {
-          smoothed_roll[i] += err_roll * SERVO_EMA_ALPHA;
+        if (fabsf(err_roll) > SERVO_DEADBAND_US_ROLL)
+        {
+          smoothed_roll[i] += err_roll * SERVO_EMA_ALPHA_ROLL;
         }
       }
     }
 
-    /* IMU control is now active using absolute orientation */
+    perf_timer_stop(PERF_SLOT_SWING_TWIST, _t_st); /* end of swing-twist block */
+
+    /* ── Thesis measurement 2: Servo PWM register write time ── */
+    uint32_t _t_pwm = perf_timer_start();
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)smoothed_pitch[0]);
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, (uint32_t)smoothed_roll[0]);
-    if (NUM_IMUS > 1) {
+    if (NUM_IMUS > 1)
+    {
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, (uint32_t)smoothed_pitch[1]);
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, (uint32_t)smoothed_roll[1]);
     }
+    perf_timer_stop(PERF_SLOT_SERVO_PWM, _t_pwm);
 
+    /* ── Thesis measurement 3: Gripper update time ── */
+    uint32_t _t_grip = perf_timer_start();
     gripper_update();
+    perf_timer_stop(PERF_SLOT_GRIPPER, _t_grip);
 
     {
       SystemState_t disp_state;
       disp_state.pitch_0 = final_pitch_deg[0];
-      disp_state.roll_0  = final_roll_deg[0];
+      disp_state.roll_0 = final_roll_deg[0];
       disp_state.servo_pitch_us_0 = (uint32_t)smoothed_pitch[0];
-      disp_state.servo_roll_us_0  = (uint32_t)smoothed_roll[0];
-      if (NUM_IMUS > 1) {
+      disp_state.servo_roll_us_0 = (uint32_t)smoothed_roll[0];
+      if (NUM_IMUS > 1)
+      {
         disp_state.pitch_1 = final_pitch_deg[1];
-        disp_state.roll_1  = final_roll_deg[1];
+        disp_state.roll_1 = final_roll_deg[1];
         disp_state.servo_pitch_us_1 = (uint32_t)smoothed_pitch[1];
-        disp_state.servo_roll_us_1  = (uint32_t)smoothed_roll[1];
-      } else {
+        disp_state.servo_roll_us_1 = (uint32_t)smoothed_roll[1];
+      }
+      else
+      {
         disp_state.pitch_1 = 0.0f;
-        disp_state.roll_1  = 0.0f;
+        disp_state.roll_1 = 0.0f;
         disp_state.servo_pitch_us_1 = 1500U;
-        disp_state.servo_roll_us_1  = 1500U;
+        disp_state.servo_roll_us_1 = 1500U;
       }
       /* Flash RE-ZEROED on display for 1 second after button press */
       disp_state.status = (rezero_flash_count > 0U) ? SYS_STATUS_REZEROED
                                                     : SYS_STATUS_RUNNING;
+      /* ── Thesis measurement 5: Display queue post time ── */
+      uint32_t _t_disp = perf_timer_start();
       osMessageQueuePut(displayQueueHandle, &disp_state, 0U, 0U);
+      perf_timer_stop(PERF_SLOT_DISP_QUEUE, _t_disp);
     }
 
 #if 0
@@ -856,6 +923,9 @@ static void imu_task_fn(void *arg)
       __BKPT(0);
     }
 #endif
+
+    /* ── Thesis perf report: prints table every ~1 s when PERF ON ── */
+    perf_timer_report_if_due();
   }
 }
 

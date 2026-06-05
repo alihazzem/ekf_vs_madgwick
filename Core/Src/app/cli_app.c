@@ -21,6 +21,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include "app/perf_timer.h" /* g_perf_enable, perf_timer_reset() */
 
 /* ─────────────────────────────────────────────────────────────
  * Helpers: trim and case conversion
@@ -164,6 +165,7 @@ void app_cli_handle_line(const char *line)
     uart_cli_send("  MPU CAL ACCEL <ms>\r\n");
     uart_cli_send("  MAD RESET\r\n");
     uart_cli_send("  EKF RESET\r\n");
+    uart_cli_send("  PERF ON|OFF|RESET\r\n");
     return;
   }
 
@@ -409,6 +411,32 @@ void app_cli_handle_line(const char *line)
     }
 
     uart_cli_send("usage: EKF RESET\r\n");
+    return;
+  }
+
+  /* ─────────── PERF commands ─────────── */
+  if (strcmp(argv[0], "PERF") == 0)
+  {
+    if (argc >= 2 && strcmp(argv[1], "ON") == 0)
+    {
+      perf_timer_reset();
+      g_perf_enable = 1;
+      uart_cli_send("perf timing ON (report every ~1 s)\r\n");
+      return;
+    }
+    if (argc >= 2 && strcmp(argv[1], "OFF") == 0)
+    {
+      g_perf_enable = 0;
+      uart_cli_send("perf timing OFF\r\n");
+      return;
+    }
+    if (argc >= 2 && strcmp(argv[1], "RESET") == 0)
+    {
+      perf_timer_reset();
+      uart_cli_send("perf counters reset\r\n");
+      return;
+    }
+    uart_cli_send("usage: PERF ON|OFF|RESET\r\n");
     return;
   }
 

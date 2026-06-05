@@ -65,7 +65,7 @@
 #define EKF_ACCEL_TIMEOUT_S 0.0f /* 0.0s = instant recovery when acceleration stops (no starvation) */
 
 /* ====== MPU6050 SETTINGS ====== */
-#define NUM_IMUS 2 // Set to 1 for single IMU, 2 for dual IMU setup
+#define NUM_IMUS 1 // Set to 1 for single IMU, 2 for dual IMU setup
 #define MPU6050_ADDR_0 0x68 // IMU 0: AD0=GND → 0x68
 #define MPU6050_ADDR_1 0x69 // IMU 1: AD0=VCC → 0x69
 

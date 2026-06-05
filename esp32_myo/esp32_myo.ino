@@ -17,10 +17,6 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 #define STM32_RX_PIN   16
 #define STM32_BAUD     921600
 
-#define LED_R          25
-#define LED_G          26
-#define LED_B          27
-
 #define CALIB_BTN      32   // active LOW, internal pullup
 
 // ─── EMG PROCESSING CONFIG ────────────────────────────────────────────────────
@@ -71,7 +67,7 @@ float THR_DEACTIVATE = 0;
 float restRMS        = 0;
 
 // ─── BLE STATE ────────────────────────────────────────────────────────────────
-BLEClient*           client       = nullptr;
+BLEClient* client       = nullptr;
 BLEAdvertisedDevice* myoDevice    = nullptr;
 bool                 myoFound     = false;
 bool                 scanning     = false;
@@ -81,56 +77,13 @@ HardwareSerial STM32Serial(2);
 
 // ─── DISPLAY VARIABLES ────────────────────────────────────────────────────────
 // FIX 1: Deferred OLED update flags — BLE callbacks (Core 0) only write these;
-//         actual I2C Wire transactions happen exclusively in loop() on Core 1.
+//        actual I2C Wire transactions happen exclusively in loop() on Core 1.
 volatile bool    newDebug       = false;
 volatile float   debugRMS       = 0;
 volatile uint8_t debugSpeed     = 0;
 
 volatile bool    needOledUpdate = false;
 char             pendingOledMsg[32] = "Booting up...";
-
-// ─── LED STATE ────────────────────────────────────────────────────────────────
-enum LEDState { LED_SCANNING, LED_PREPARE, LED_REST_PHASE, LED_FLEX_PHASE, LED_ACTIVE, LED_DISCONNECTED };
-LEDState      currentLED  = LED_SCANNING;
-unsigned long lastBlinkMs = 0;
-bool          blinkToggle = false;
-
-// ─── LED HELPERS (Common Anode) ───────────────────────────────────────────────
-void setLED(bool r, bool g, bool b) {
-  digitalWrite(LED_R, r ? LOW : HIGH);
-  digitalWrite(LED_G, g ? LOW : HIGH);
-  digitalWrite(LED_B, b ? LOW : HIGH);
-}
-
-void updateLED() {
-  unsigned long now = millis();
-  switch (currentLED) {
-    case LED_SCANNING:
-      if (now - lastBlinkMs > 600) {
-        blinkToggle = !blinkToggle;
-        lastBlinkMs = now;
-        setLED(false, false, blinkToggle);
-      }
-      break;
-    case LED_PREPARE:
-      if (now - lastBlinkMs > 250) {
-        blinkToggle = !blinkToggle;
-        lastBlinkMs = now;
-        setLED(blinkToggle, blinkToggle, false);
-      }
-      break;
-    case LED_REST_PHASE: setLED(true, true, false);  break;
-    case LED_FLEX_PHASE: setLED(true, false, false); break;
-    case LED_ACTIVE:     setLED(false, true, false); break;
-    case LED_DISCONNECTED:
-      if (now - lastBlinkMs > 200) {
-        blinkToggle = !blinkToggle;
-        lastBlinkMs = now;
-        setLED(blinkToggle, false, false);
-      }
-      break;
-  }
-}
 
 // ─── OLED HELPER ─────────────────────────────────────────────────────────────
 // MUST only be called from loop() — never from a BLE callback.
@@ -201,7 +154,6 @@ void handleCalibration(float rms) {
 
   if (calibState == CALIB_PREPARE) {
     if (!calibStarted) {
-      currentLED      = LED_PREPARE;
       calibPhaseStart = millis();
       calibStarted    = true;
       requestOledUpdate("Get Ready... (2s)");
@@ -214,7 +166,6 @@ void handleCalibration(float rms) {
 
   else if (calibState == CALIB_REST) {
     if (!calibStarted) {
-      currentLED      = LED_REST_PHASE;
       calibPhaseStart = millis();
       calibStarted    = true;
       calibAccum      = 0;
@@ -233,7 +184,6 @@ void handleCalibration(float rms) {
 
   else if (calibState == CALIB_MAX) {
     if (!calibStarted) {
-      currentLED      = LED_FLEX_PHASE;
       calibPhaseStart = millis();
       calibStarted    = true;
       calibAccum      = 0;
@@ -251,7 +201,6 @@ void handleCalibration(float rms) {
       THR_ACTIVATE   = restRMS + range * 0.65f;
 
       calibState = CALIB_DONE;
-      currentLED = LED_ACTIVE;
       requestOledUpdate("Myo Active");
     }
   }
@@ -264,7 +213,6 @@ void resetCalibration() {
   calibStarted = false;
   calibAccum   = 0;
   calibSamples = 0;
-  currentLED   = LED_PREPARE;
   updateOLED("Get Ready... (2s)");
 }
 
@@ -331,7 +279,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice advertisedDevice) {
     if (advertisedDevice.isAdvertisingService(BLEUUID(CONTROL_SERVICE_UUID))) {
       // FIX 2: Free stale myoDevice before overwriting — prevents heap exhaustion
-      //         across multiple reconnect cycles.
+      //        across multiple reconnect cycles.
       if (myoDevice != nullptr) {
         delete myoDevice;
         myoDevice = nullptr;
@@ -348,7 +296,6 @@ void scanCompleteCB(BLEScanResults scanResults) {}
 
 void startScan() {
   if (scanning) return;
-  currentLED = LED_SCANNING;
   scanning   = true;
   myoFound   = false;
   updateOLED("Scanning for Myo...");
@@ -424,18 +371,11 @@ void setup() {
     updateOLED("Booting up...");
   }
 
-  pinMode(LED_R,     OUTPUT);
-  pinMode(LED_G,     OUTPUT);
-  pinMode(LED_B,     OUTPUT);
   pinMode(CALIB_BTN, INPUT_PULLUP);
-
-  setLED(false, false, false);
 
   STM32Serial.begin(STM32_BAUD, SERIAL_8N1, STM32_RX_PIN, STM32_TX_PIN);
 
 #if TEST_MODE
-  currentLED = LED_ACTIVE;
-  setLED(false, true, false);  // green — test mode active
   updateOLED("TEST MODE");
   testLastStepMs = millis();
   testLastPktMs  = millis();
@@ -470,8 +410,6 @@ void loop() {
     newDebug   = true;
   }
 
-  updateLED();
-
   if (needOledUpdate) {
     needOledUpdate = false;
     updateOLED(pendingOledMsg);
@@ -489,8 +427,6 @@ void loop() {
   }
   return;
 #endif
-
-  updateLED();
 
   // ── FIX 1: Flush deferred OLED updates from BLE callbacks ─────────────────
   if (needOledUpdate) {
@@ -513,7 +449,6 @@ void loop() {
     STM32Serial.write(stopPkt, 3);
     debugSpeed = 0;
 
-    currentLED = LED_DISCONNECTED;
     updateOLED("Connection Lost!");
 
     delete client;
