@@ -150,11 +150,14 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
 #endif /* SENSOR_GY91 */
 
     // Init per-IMU accel bias from compile-time defaults
-    if (i == 0) {
+    if (i == 0)
+    {
       s_ax_off[i] = ACCEL_BIAS_X_0;
       s_ay_off[i] = ACCEL_BIAS_Y_0;
       s_az_off[i] = ACCEL_BIAS_Z_0;
-    } else {
+    }
+    else
+    {
       s_ax_off[i] = ACCEL_BIAS_X_1;
       s_ay_off[i] = ACCEL_BIAS_Y_1;
       s_az_off[i] = ACCEL_BIAS_Z_1;
@@ -239,7 +242,9 @@ void imu_app_step(void)
   xSemaphoreGive(g_i2c_mutex);
 
   bool any_ok = false;
-  for (int i = 0; i < NUM_IMUS; i++) if (imu_ok[i]) any_ok = true;
+  for (int i = 0; i < NUM_IMUS; i++)
+    if (imu_ok[i])
+      any_ok = true;
 
   if (any_ok)
   {
@@ -366,6 +371,13 @@ void imu_app_step(void)
 
       // On the very first valid sample initialise each filter's quaternion from
       // the accelerometer so roll/pitch are correct immediately.
+#if FAULT_INJECT_IDENTITY_INIT
+      if (!s_mad_aligned[i])
+      {
+        madgwick_reset(&s_mad[i]);
+        s_mad_aligned[i] = 1;
+      }
+#else
       if (!s_mad_aligned[i])
       {
 #if SENSOR_GY91
@@ -382,7 +394,15 @@ void imu_app_step(void)
 #endif
         s_mad_aligned[i] = 1;
       }
+#endif
 #if RUN_EKF
+#if FAULT_INJECT_IDENTITY_INIT
+      if (!s_ekf_aligned[i])
+      {
+        ekf7_reset(&s_ekf[i]);
+        s_ekf_aligned[i] = 1;
+      }
+#else
       if (!s_ekf_aligned[i])
       {
 #if SENSOR_GY91
@@ -399,6 +419,7 @@ void imu_app_step(void)
 #endif
         s_ekf_aligned[i] = 1;
       }
+#endif
 #endif
 
       // ---- Madgwick update (body-frame inputs, measured dt) ----
@@ -470,13 +491,16 @@ void imu_app_step(void)
     } // End of IMU loop
 
     // ---- optional streaming print (decimated) ----
-    // CSV format (16 fields):
+    // CSV format (21 fields):
     //  D, t_ms, imu_idx,
     //  ax_raw, ay_raw, az_raw, gx_raw, gy_raw, gz_raw,  (int16 sensor counts)
     //  mad_roll_mdeg, mad_pitch_mdeg, mad_yaw_mdeg,      (Madgwick output, mdeg)
     //  mad_us,                                           (Madgwick step CPU time µs)
     //  ekf_roll_mdeg, ekf_pitch_mdeg, ekf_yaw_mdeg,      (EKF output, mdeg)
-    //  ekf_us                                            (EKF step CPU time µs)
+    //  ekf_us,                                           (EKF step CPU time µs)
+    //  ekf_r_eff_n,                                      (EKF adaptive R ×1e6)
+    //  mad_beta_eff_n,                                   (Madgwick adaptive β ×1e6)
+    //  ekf_bx_n, ekf_by_n, ekf_bz_n                     (EKF gyro bias ×1e6 rad/s)
     //
     // Columns are 0 when the respective filter is disabled or not yet valid.
     // The "D," prefix lets capture scripts ignore CLI chatter lines.
@@ -494,9 +518,27 @@ void imu_app_step(void)
         int32_t ekf_r = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].roll_deg * 1000.0f) : 0;
         int32_t ekf_p = s_ekf_valid[i] ? (int32_t)(-s_ekf_att[i].pitch_deg * 1000.0f) : 0;
         int32_t ekf_y = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].yaw_deg * 1000.0f) : 0;
+
+        // Adaptive diagnostics (×1e6 to preserve float precision as integer)
+        int32_t ekf_r_eff_n = s_ekf_valid[i]
+                                  ? (int32_t)(ekf7_get_r_eff(&s_ekf[i]) * 1000000.0f)
+                                  : 0;
+        int32_t mad_beta_n = s_mad_valid[i]
+                                 ? (int32_t)(madgwick_get_beta_eff(&s_mad[i]) * 1000000.0f)
+                                 : 0;
+
+        // EKF gyro bias (rad/s ×1e6)
+        float ekf_b[3] = {0.0f, 0.0f, 0.0f};
+        if (s_ekf_valid[i])
+          ekf7_get_bias(&s_ekf[i], ekf_b);
+        int32_t ekf_bx_n = (int32_t)(ekf_b[0] * 1000000.0f);
+        int32_t ekf_by_n = (int32_t)(ekf_b[1] * 1000000.0f);
+        int32_t ekf_bz_n = (int32_t)(ekf_b[2] * 1000000.0f);
+
         uart_cli_sendf("D,%lu,%d,%d,%d,%d,%d,%d,%d,"
                        "%ld,%ld,%ld,%lu,"
-                       "%ld,%ld,%ld,%lu\r\n",
+                       "%ld,%ld,%ld,%lu,"
+                       "%ld,%ld,%ld,%ld,%ld\r\n",
                        /* time */
                        (unsigned long)HAL_GetTick(),
                        (int)i,
@@ -508,7 +550,10 @@ void imu_app_step(void)
                        (unsigned long)s_mad_last_us[i],
                        /* EKF Euler */
                        (long)ekf_r, (long)ekf_p, (long)ekf_y,
-                       (unsigned long)s_ekf_last_us[i]);
+                       (unsigned long)s_ekf_last_us[i],
+                       /* Adaptive diagnostics */
+                       (long)ekf_r_eff_n, (long)mad_beta_n,
+                       (long)ekf_bx_n, (long)ekf_by_n, (long)ekf_bz_n);
       }
     }
   }

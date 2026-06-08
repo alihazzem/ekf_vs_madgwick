@@ -31,6 +31,9 @@ extern "C"
     // motion-adaptive beta: scales beta down when |a| deviates from 1g
     float beta_motion_k; // beta_eff /= (1 + k * dev^2), dev = |a_mag - 1|
     float beta_min;      // floor: beta_eff never drops below this value
+
+    // last computed effective beta (updated each IMU/MARG update call)
+    float last_beta_eff;
   } madgwick_t;
 
   void madgwick_init(madgwick_t *m, float beta);
@@ -38,6 +41,12 @@ extern "C"
 
   void madgwick_set_beta(madgwick_t *m, float beta);
   float madgwick_get_beta(const madgwick_t *m);
+
+  /**
+   * Return the most recently computed effective beta (after adaptive ramp
+   * and motion-adaptive scaling). Returns 0 before the first update call.
+   */
+  float madgwick_get_beta_eff(const madgwick_t *m);
 
   void madgwick_set_accel_reject(madgwick_t *m, bool en, float min_g, float max_g);
 

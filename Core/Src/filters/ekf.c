@@ -613,6 +613,9 @@ void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g, float dt_s
     float r_val = e->sigma_accel * e->sigma_accel *
                   (1.0f + e->r_adapt_k * dev * dev);
 
+    /* Cache effective R for external diagnostic access */
+    e->last_r_eff = r_val;
+
     /* s_HP = H * P  (3×7) */
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 7; j++)
@@ -941,4 +944,11 @@ void ekf7_get_bias(const ekf7_t *e, float b_out[3])
     b_out[0] = e->b[0];
     b_out[1] = e->b[1];
     b_out[2] = e->b[2];
+}
+
+float ekf7_get_r_eff(const ekf7_t *e)
+{
+    if (!e)
+        return 0.0f;
+    return e->last_r_eff;
 }

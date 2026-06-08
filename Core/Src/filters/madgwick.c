@@ -330,6 +330,7 @@ void madgwick_update_imu(madgwick_t *m,
   m->q1 = q1;
   m->q2 = q2;
   m->q3 = q3;
+  m->last_beta_eff = beta_eff;  /* cache for external diagnostics */
 }
 
 void madgwick_update_marg(madgwick_t *m,
@@ -474,4 +475,12 @@ void madgwick_update_marg(madgwick_t *m,
   m->q1 = q1;
   m->q2 = q2;
   m->q3 = q3;
+  m->last_beta_eff = beta_eff;  /* cache for external diagnostics */
+}
+
+float madgwick_get_beta_eff(const madgwick_t *m)
+{
+  if (!m)
+    return 0.0f;
+  return m->last_beta_eff;
 }

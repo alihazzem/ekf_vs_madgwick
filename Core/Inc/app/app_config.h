@@ -26,7 +26,14 @@
 
 /* ====== ENABLE/DISABLE FILTERS ====== */
 #define RUN_MADGWICK 1
-#define RUN_EKF 1
+#define RUN_EKF 0
+
+/* ====== CONVERGENCE TEST (FAULT INJECTION) ======
+ * Set to 1 to force filters to start at identity quaternion (0,0,0),
+ * bypassing accel/mag alignment on the first sample. Use for thesis tests
+ * only, then set back to 0 for normal operation.
+ */
+#define FAULT_INJECT_IDENTITY_INIT 0
 
 /* ====== LOGGING ====== */
 #define LOG_UART 1 // 1 = UART, 0 = SWO (later)
@@ -65,7 +72,7 @@
 #define EKF_ACCEL_TIMEOUT_S 0.0f /* 0.0s = instant recovery when acceleration stops (no starvation) */
 
 /* ====== MPU6050 SETTINGS ====== */
-#define NUM_IMUS 1 // Set to 1 for single IMU, 2 for dual IMU setup
+#define NUM_IMUS 1          // Set to 1 for single IMU, 2 for dual IMU setup
 #define MPU6050_ADDR_0 0x68 // IMU 0: AD0=GND → 0x68
 #define MPU6050_ADDR_1 0x69 // IMU 1: AD0=VCC → 0x69
 

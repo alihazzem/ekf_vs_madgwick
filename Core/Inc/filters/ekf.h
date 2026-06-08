@@ -55,6 +55,9 @@ extern "C"
         float r_adapt_k; /* R_eff = sigma_accel^2 * (1 + r_adapt_k * dev^2)
                             dev = ||a_norm| - 1|; larger k -> faster trust drop */
 
+        /* Last computed adaptive R value (diagonal scalar, updated each accel step) */
+        float last_r_eff;
+
         /* Hard-reject safety fallback (before adaptive R) -------------------- */
         bool accel_reject_en;
         float accel_reject_min_g; /* below this -> skip update entirely */
@@ -202,6 +205,13 @@ extern "C"
      * @brief  Copy current gyro bias estimate into b_out[3] as [bx, by, bz] rad/s.
      */
     void ekf7_get_bias(const ekf7_t *e, float b_out[3]);
+
+    /**
+     * @brief  Return the most recently computed effective measurement noise R_eff
+     *         (diagonal scalar): sigma_accel^2 * (1 + k * dev^2).
+     *         Returns 0 before the first ekf7_update_accel() call.
+     */
+    float ekf7_get_r_eff(const ekf7_t *e);
 
 #ifdef __cplusplus
 }
