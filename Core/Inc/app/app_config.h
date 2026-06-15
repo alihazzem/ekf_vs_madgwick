@@ -25,8 +25,8 @@
 #define IMU_DT_S (1.0f / IMU_FS_HZ)
 
 /* ====== ENABLE/DISABLE FILTERS ====== */
-#define RUN_MADGWICK 1
-#define RUN_EKF 0
+#define RUN_MADGWICK 0
+#define RUN_EKF 1
 
 /* ====== CONVERGENCE TEST (FAULT INJECTION) ======
  * Set to 1 to force filters to start at identity quaternion (0,0,0),
@@ -75,6 +75,23 @@
 #define NUM_IMUS 1          // Set to 1 for single IMU, 2 for dual IMU setup
 #define MPU6050_ADDR_0 0x68 // IMU 0: AD0=GND → 0x68
 #define MPU6050_ADDR_1 0x69 // IMU 1: AD0=VCC → 0x69
+
+/* ====== DC MOTOR COUNT ======
+ * 1 = gripper only  (TIM4 CH1=PB6, CH2=PB7)
+ * 2 = gripper + second motor  (adds TIM4 CH3=PB8, CH4=PB9)
+ * The second motor always mirrors the gripper at 50% PWM.
+ */
+#define NUM_DC_MOTORS 1
+
+/* ====== IMU 1 RAW ACCEL MODE ======
+ * Only meaningful when NUM_IMUS = 2.
+ * 0 = IMU 1 uses the same filter pipeline as IMU 0 (EKF / Madgwick).
+ * 1 = IMU 1 uses raw accelerometer tilt only (no gyro, no filter).
+ *     IMU 0 always keeps the full filter. Both motors wait for IMU 0
+ *     calibration to finish before moving (existing safety behaviour).
+ *     Re-zero button captures a raw pitch/roll offset for IMU 1.
+ */
+#define IMU1_RAW_ACCEL 0
 
 #define MADGWICK_ACCEL_REJECT_EN 1
 #define MADGWICK_ACCEL_MIN_G 0.3f /* reject if |a| < 0.3 g */

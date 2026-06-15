@@ -1,4 +1,5 @@
 #include "drivers/gripper.h"
+#include "app/app_config.h"  /* NUM_DC_MOTORS */
 #include "cmsis_os.h"  /* For osDelay */
 #include "drivers/emg_uart.h"  /* For g_emg_speed and g_emg_speed_valid */
 
@@ -14,21 +15,33 @@ static GripperState_t s_pending_state = GRIPPER_IDLE_OPEN;
 
 /* Hardware abstraction for motor states */
 static void motor_stop(void) {
-  /* D0 = LOW, D1 = LOW */
+  /* Motor 1 (CH1/CH2) and Motor 2 (CH3/CH4) — both stopped */
   TIM4->CCR1 = 0;
   TIM4->CCR2 = 0;
+#if NUM_DC_MOTORS > 1
+  TIM4->CCR3 = 0;
+  TIM4->CCR4 = 0;
+#endif
 }
 
 static void motor_forward(void) {
-  /* Closing (forward) at 50% PWM: D0=LOW, D1=PWM(50%) (Inverted per user request) */
+  /* Both motors forward at 50% PWM: A-side=LOW, B-side=50% */
   TIM4->CCR1 = 0;
   TIM4->CCR2 = 10000; /* 50% of 20000 */
+#if NUM_DC_MOTORS > 1
+  TIM4->CCR3 = 0;
+  TIM4->CCR4 = 10000;
+#endif
 }
 
 static void motor_backward(void) {
-  /* Opening (backward) at 50% PWM: D0=PWM(50%), D1=LOW (Inverted per user request) */
+  /* Both motors backward at 50% PWM: A-side=50%, B-side=LOW */
   TIM4->CCR1 = 10000; /* 50% of 20000 */
   TIM4->CCR2 = 0;
+#if NUM_DC_MOTORS > 1
+  TIM4->CCR3 = 10000;
+  TIM4->CCR4 = 0;
+#endif
 }
 
 void gripper_init(void) {
@@ -75,6 +88,41 @@ void gripper_init(void) {
   TIM4->CCER |= TIM_CCER_CC1E | TIM_CCER_CC2E;
   /* Note: TIM4 is a general purpose timer, so no BDTR register / MOE bit is needed */
   
+#if NUM_DC_MOTORS > 1
+  /* Configure PB8 as Alternate Function 2 (TIM4_CH3) */
+  GPIOB->MODER &= ~(3U << (8 * 2));
+  GPIOB->MODER |=  (2U << (8 * 2)); /* Alternate function mode */
+  GPIOB->OSPEEDR |= (3U << (8 * 2)); /* High speed */
+  GPIOB->PUPDR &= ~(3U << (8 * 2)); /* No pull */
+  GPIOB->AFR[1] &= ~(0xFU << ((8 - 8) * 4)); /* PB8 is in AFR[1] (pins 8-15) */
+  GPIOB->AFR[1] |=  (2U  << ((8 - 8) * 4)); /* AF02 for TIM4_CH3 */
+
+  /* Configure PB9 as Alternate Function 2 (TIM4_CH4) */
+  GPIOB->MODER &= ~(3U << (9 * 2));
+  GPIOB->MODER |=  (2U << (9 * 2)); /* Alternate function mode */
+  GPIOB->OSPEEDR |= (3U << (9 * 2)); /* High speed */
+  GPIOB->PUPDR &= ~(3U << (9 * 2)); /* No pull */
+  GPIOB->AFR[1] &= ~(0xFU << ((9 - 8) * 4));
+  GPIOB->AFR[1] |=  (2U  << ((9 - 8) * 4)); /* AF02 for TIM4_CH4 */
+
+  /* Configure Channel 3 for PWM mode 1 (CCMR2 bits [6:4]) */
+  TIM4->CCMR2 &= ~TIM_CCMR2_OC3M_Msk;
+  TIM4->CCMR2 |= (6U << TIM_CCMR2_OC3M_Pos); /* PWM mode 1 */
+  TIM4->CCMR2 |= TIM_CCMR2_OC3PE; /* Preload enable */
+
+  /* Configure Channel 4 for PWM mode 1 (CCMR2 bits [14:12]) */
+  TIM4->CCMR2 &= ~TIM_CCMR2_OC4M_Msk;
+  TIM4->CCMR2 |= (6U << TIM_CCMR2_OC4M_Pos); /* PWM mode 1 */
+  TIM4->CCMR2 |= TIM_CCMR2_OC4PE; /* Preload enable */
+
+  /* Initial Duty Cycle 0% for CH3 and CH4 */
+  TIM4->CCR3 = 0;
+  TIM4->CCR4 = 0;
+
+  /* Enable Capture/Compare outputs for CH3 and CH4 */
+  TIM4->CCER |= TIM_CCER_CC3E | TIM_CCER_CC4E;
+#endif /* NUM_DC_MOTORS > 1 */
+
   /* Start TIM4 */
   TIM4->CR1 |= TIM_CR1_CEN;
 

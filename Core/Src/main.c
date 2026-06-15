@@ -621,7 +621,7 @@ static void imu_task_fn(void *arg)
     imu_app_step();
   }
 
-  /* Capture q_ref = neutral pose */
+  /* Capture q_ref = neutral pose (filtered IMUs only) */
   float q_ref[NUM_IMUS][4];
   for (int i = 0; i < NUM_IMUS; i++)
   {
@@ -629,6 +629,9 @@ static void imu_task_fn(void *arg)
     q_ref[i][1] = 0.0f;
     q_ref[i][2] = 0.0f;
     q_ref[i][3] = 0.0f;
+#if IMU1_RAW_ACCEL
+    if (i == 1) continue; /* raw-accel IMU needs no quaternion reference */
+#endif
     if (imu_app_get_ekf(i, &ekf_att[i]))
     {
       q_ref[i][0] = ekf_att[i].q0;
@@ -647,6 +650,19 @@ static void imu_task_fn(void *arg)
     smoothed_pitch[i] = 1500.0f;
     smoothed_roll[i] = 500.0f;
 
+#if IMU1_RAW_ACCEL
+    if (i == 1)
+    {
+      /* Seed IMU 1 from raw accel tilt — no quaternion needed */
+      float ax1s, ay1s, az1s;
+      imu_app_get_accel_g(1, &ax1s, &ay1s, &az1s);
+      float _p1 = atan2f(-ax1s, sqrtf(ay1s * ay1s + az1s * az1s)) * (180.0f / 3.14159265f);
+      float _r1 = atan2f(ay1s, az1s) * (180.0f / 3.14159265f);
+      smoothed_pitch[1] = fmaxf(1055.6f, fminf(1944.4f, 1500.0f + ((_p1 * PITCH_SERVO_DIR) * (2000.0f / 180.0f))));
+      smoothed_roll[1]  = fmaxf(500.0f,  fminf(2500.0f, 1500.0f + (_r1 * (2000.0f / 180.0f))));
+      continue;
+    }
+#endif
     if (imu_app_get_ekf(i, &ekf_att[i]))
     {
 #if BYPASS_IMU_FILTER
@@ -714,6 +730,11 @@ static void imu_task_fn(void *arg)
 
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); /* active-low: OFF */
 
+#if IMU1_RAW_ACCEL
+  /* Re-zero reference angles for raw-accel IMU 1 (updated on button press) */
+  float raw_ref_pitch_1 = 0.0f;
+  float raw_ref_roll_1  = 0.0f;
+#endif
   uint32_t rezero_flash_count = 0;
 
   /* --- Main loop: IMU-driven motor control --- */
@@ -731,6 +752,17 @@ static void imu_task_fn(void *arg)
       g_rezero_requested = 0; /* Clear FIRST to avoid double-trigger */
       for (int i = 0; i < NUM_IMUS; i++)
       {
+#if IMU1_RAW_ACCEL
+        if (i == 1)
+        {
+          /* Capture current raw tilt as the new zero reference for IMU 1 */
+          float ax1r, ay1r, az1r;
+          imu_app_get_accel_g(1, &ax1r, &ay1r, &az1r);
+          raw_ref_pitch_1 = atan2f(-ax1r, sqrtf(ay1r * ay1r + az1r * az1r)) * (180.0f / 3.14159265f);
+          raw_ref_roll_1  = atan2f(ay1r, az1r) * (180.0f / 3.14159265f);
+          continue;
+        }
+#endif
         if (imu_app_get_ekf(i, &ekf_att[i]))
         {
           q_ref[i][0] = ekf_att[i].q0;
@@ -752,63 +784,99 @@ static void imu_task_fn(void *arg)
 
     for (int i = 0; i < NUM_IMUS; i++)
     {
+      float pitch_deg = 0.0f;
+      float roll_deg  = 0.0f;
+      int   _valid    = 0;
+
+#if IMU1_RAW_ACCEL
+      if (i == 1)
+      {
+        /* IMU 1: raw accelerometer tilt only — no filter, no gyro fusion */
+        float ax1, ay1, az1;
+        imu_app_get_accel_g(1, &ax1, &ay1, &az1);
+        pitch_deg = atan2f(-ax1, sqrtf(ay1 * ay1 + az1 * az1)) * (180.0f / 3.14159265f) - raw_ref_pitch_1;
+        roll_deg  = atan2f(ay1, az1) * (180.0f / 3.14159265f) - raw_ref_roll_1;
+        _valid = 1;
+      }
+      else
+#endif
       if (imu_app_get_ekf(i, &ekf_att[i]))
       {
 #if BYPASS_IMU_FILTER
         float ax, ay, az;
         imu_app_get_accel_g(i, &ax, &ay, &az);
-        float pitch_deg = atan2f(-ax, sqrtf(ay * ay + az * az)) * (180.0f / 3.14159265f);
-        float roll_deg = atan2f(ay, az) * (180.0f / 3.14159265f);
+        pitch_deg = atan2f(-ax, sqrtf(ay * ay + az * az)) * (180.0f / 3.14159265f);
+        roll_deg  = atan2f(ay, az) * (180.0f / 3.14159265f);
 #else
         float q_now[4] = {ekf_att[i].q0, ekf_att[i].q1, ekf_att[i].q2, ekf_att[i].q3};
 
         float q_ref_conj[4] = {q_ref[i][0], -q_ref[i][1], -q_ref[i][2], -q_ref[i][3]};
         float q_delta[4];
         math3d_quat_multiply(q_ref_conj, q_now, q_delta);
-        float pitch_deg = 0.0f;
-        float roll_deg = 0.0f;
         quat_to_tilt_deg(q_delta, &pitch_deg, &roll_deg);
 #endif
+        _valid = 1;
+      }
 
+      if (_valid)
+      {
+#if IMU1_RAW_ACCEL
+        if (i == 1)
+        {
+          /* IMU 1: purely raw — only angle-to-µs conversion + output clamping.
+           * No deadzone, no EMA, no deadband. The servo limits are the only
+           * constraint applied (same physical limits as IMU 0). */
+          final_pitch_deg[1] = pitch_deg;
+          final_roll_deg[1]  = roll_deg;
+          float p_us1 = 1500.0f + ((pitch_deg * PITCH_SERVO_DIR) * (2000.0f / 180.0f));
+          float r_us1 = 1500.0f + (roll_deg * (2000.0f / 180.0f));
+          smoothed_pitch[1] = fmaxf(1055.6f, fminf(1944.4f, p_us1));
+          smoothed_roll[1]  = fmaxf(500.0f,  fminf(2500.0f, r_us1));
+        }
+        else
+#endif
+        {
+          /* IMU 0 (or IMU 1 when IMU1_RAW_ACCEL=0): full deadzone + EMA pipeline */
 #define PITCH_DEADZONE_DEG 1.0f
 #define ROLL_DEADZONE_DEG 2.0f
 
-        if (fabsf(pitch_deg) < PITCH_DEADZONE_DEG)
-          pitch_deg = 0.0f;
-        else
-          pitch_deg = (pitch_deg > 0) ? (pitch_deg - PITCH_DEADZONE_DEG)
-                                      : (pitch_deg + PITCH_DEADZONE_DEG);
+          if (fabsf(pitch_deg) < PITCH_DEADZONE_DEG)
+            pitch_deg = 0.0f;
+          else
+            pitch_deg = (pitch_deg > 0) ? (pitch_deg - PITCH_DEADZONE_DEG)
+                                        : (pitch_deg + PITCH_DEADZONE_DEG);
 
-        if (fabsf(roll_deg) < ROLL_DEADZONE_DEG)
-          roll_deg = 0.0f;
-        else
-          roll_deg = (roll_deg > 0) ? (roll_deg - ROLL_DEADZONE_DEG)
-                                    : (roll_deg + ROLL_DEADZONE_DEG);
+          if (fabsf(roll_deg) < ROLL_DEADZONE_DEG)
+            roll_deg = 0.0f;
+          else
+            roll_deg = (roll_deg > 0) ? (roll_deg - ROLL_DEADZONE_DEG)
+                                      : (roll_deg + ROLL_DEADZONE_DEG);
 
-        final_pitch_deg[i] = pitch_deg;
-        final_roll_deg[i] = roll_deg;
+          final_pitch_deg[i] = pitch_deg;
+          final_roll_deg[i] = roll_deg;
 
-        float pitch_servo_us = 1500.0f + ((pitch_deg * PITCH_SERVO_DIR) * (2000.0f / 180.0f));
-        uint32_t ccr_pitch = (uint32_t)fmaxf(1055.6f, fminf(1944.4f, pitch_servo_us));
+          float pitch_servo_us = 1500.0f + ((pitch_deg * PITCH_SERVO_DIR) * (2000.0f / 180.0f));
+          uint32_t ccr_pitch = (uint32_t)fmaxf(1055.6f, fminf(1944.4f, pitch_servo_us));
 
-        float roll_servo_us = 1500.0f + (roll_deg * (2000.0f / 180.0f));
-        uint32_t ccr_roll = (uint32_t)fmaxf(500.0f, fminf(2500.0f, roll_servo_us));
+          float roll_servo_us = 1500.0f + (roll_deg * (2000.0f / 180.0f));
+          uint32_t ccr_roll = (uint32_t)fmaxf(500.0f, fminf(2500.0f, roll_servo_us));
 
 #define SERVO_EMA_ALPHA_PITCH 0.1f
 #define SERVO_EMA_ALPHA_ROLL 0.1f
 #define SERVO_DEADBAND_US_PITCH 2.0f
 #define SERVO_DEADBAND_US_ROLL 2.0f
 
-        float err_pitch = (float)ccr_pitch - smoothed_pitch[i];
-        if (fabsf(err_pitch) > SERVO_DEADBAND_US_PITCH)
-        {
-          smoothed_pitch[i] += err_pitch * SERVO_EMA_ALPHA_PITCH;
-        }
+          float err_pitch = (float)ccr_pitch - smoothed_pitch[i];
+          if (fabsf(err_pitch) > SERVO_DEADBAND_US_PITCH)
+          {
+            smoothed_pitch[i] += err_pitch * SERVO_EMA_ALPHA_PITCH;
+          }
 
-        float err_roll = (float)ccr_roll - smoothed_roll[i];
-        if (fabsf(err_roll) > SERVO_DEADBAND_US_ROLL)
-        {
-          smoothed_roll[i] += err_roll * SERVO_EMA_ALPHA_ROLL;
+          float err_roll = (float)ccr_roll - smoothed_roll[i];
+          if (fabsf(err_roll) > SERVO_DEADBAND_US_ROLL)
+          {
+            smoothed_roll[i] += err_roll * SERVO_EMA_ALPHA_ROLL;
+          }
         }
       }
     }
