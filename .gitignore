@@ -56,3 +56,5 @@ scripts/*
 matlab/*
 emg_v2/*
 after_defense/*
+docs/*
+OLD_ESP32_MYO/*
