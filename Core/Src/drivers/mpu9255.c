@@ -75,8 +75,15 @@ mpu9255_status_t mpu9255_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9
     if (i2c_write_reg(hi2c, addr7, MPU9255_REG_ACCEL_CONFIG, 0x00u, 50) != I2C_REG_OK)
         return MPU9255_ERR_I2C;
 
-    /* 7) Read back config for CLI display */
-    out_cfg->addr7 = addr7;
+    /* 7) Accel DLPF: ACCEL_CONFIG2 = 0x03
+     *    ACCEL_FCHOICE_B = 0, A_DLPF_CFG = 3 → BW ~44 Hz.
+     *    Without this write the accel DLPF defaults to 460 Hz after reset
+     *    (10× the gyro BW), providing virtually no anti-aliasing at 200 Hz. */
+    if (i2c_write_reg(hi2c, addr7, MPU9255_REG_ACCEL_CONFIG2, 0x03u, 50) != I2C_REG_OK)
+        return MPU9255_ERR_I2C;
+
+    /* 8) Read back config for CLI display */
+    out_cfg->addr7  = addr7;
     out_cfg->whoami = id;
     return mpu9255_read_cfg(hi2c, addr7, out_cfg);
 }
@@ -115,6 +122,10 @@ mpu9255_status_t mpu9255_read_cfg(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu925
     if (i2c_read_reg(hi2c, addr7, MPU9255_REG_ACCEL_CONFIG, &v, 1, 50) != I2C_REG_OK)
         return MPU9255_ERR_I2C;
     cfg->accel_config = v;
+
+    if (i2c_read_reg(hi2c, addr7, MPU9255_REG_ACCEL_CONFIG2, &v, 1, 50) != I2C_REG_OK)
+        return MPU9255_ERR_I2C;
+    cfg->accel_config2 = v;
 
     cfg->addr7 = addr7;
     return MPU9255_OK;

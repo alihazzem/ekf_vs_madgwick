@@ -17,14 +17,15 @@
 #define MPU9250_WHOAMI_VAL 0x71u /* MPU-9250 (also accepted) */
 
 /* Registers (identical to MPU-6050) */
-#define MPU9255_REG_SMPLRT_DIV 0x19u
-#define MPU9255_REG_CONFIG 0x1Au
-#define MPU9255_REG_GYRO_CONFIG 0x1Bu
-#define MPU9255_REG_ACCEL_CONFIG 0x1Cu
-#define MPU9255_REG_INT_PIN_CFG 0x37u /* BYPASS_EN lives here */
-#define MPU9255_REG_USER_CTRL 0x6Au   /* I2C_MST_EN lives here */
-#define MPU9255_REG_PWR_MGMT_1 0x6Bu
-#define MPU9255_REG_WHO_AM_I 0x75u
+#define MPU9255_REG_SMPLRT_DIV    0x19u
+#define MPU9255_REG_CONFIG        0x1Au
+#define MPU9255_REG_GYRO_CONFIG   0x1Bu
+#define MPU9255_REG_ACCEL_CONFIG  0x1Cu
+#define MPU9255_REG_ACCEL_CONFIG2 0x1Du /* accel DLPF — separate from gyro DLPF */
+#define MPU9255_REG_INT_PIN_CFG   0x37u /* BYPASS_EN lives here */
+#define MPU9255_REG_USER_CTRL     0x6Au /* I2C_MST_EN lives here */
+#define MPU9255_REG_PWR_MGMT_1   0x6Bu
+#define MPU9255_REG_WHO_AM_I      0x75u
 #define MPU9255_REG_ACCEL_XOUT_H 0x3Bu
 
 /* INT_PIN_CFG bits */
@@ -51,6 +52,7 @@ typedef struct
     uint8_t config;
     uint8_t gyro_config;
     uint8_t accel_config;
+    uint8_t accel_config2; /* DLPF for accel (register 0x1D) */
 } mpu9255_cfg_t;
 
 /* ── Return codes ── */

@@ -1,25 +1,4 @@
-/**
- * @file display_task.h
- * @brief RTOS display task, SystemState_t IPC struct, and queue handle.
- *
- * Architecture overview:
- *
- *   [IMU Task] ──(osMessageQueuePut, timeout=0)──► [displayQueueHandle]
- *                                                           │
- *                                             (osMessageQueueGet, blocking)
- *                                                           ▼
- *                                                  [Display Task (Low)]
- *                                                           │
- *                                             (ssd1306_flush via hi2c2)
- *                                                           ▼
- *                                                      [OLED Display]
- *
- * The zero-timeout PUT means the IMU task NEVER blocks to wait for the
- * display task. If the queue is already full (display task is still
- * rendering the previous frame) the new message is silently dropped.
- * This guarantees the 200 Hz real-time loop is never impacted by the
- * 10 Hz display refresh.
- */
+
 #ifndef APP_DISPLAY_TASK_H
 #define APP_DISPLAY_TASK_H
 

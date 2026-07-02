@@ -1,22 +1,3 @@
-/**
- * @file perf_timer.h
- * @brief Lightweight DWT-based execution-time profiler.
- *
- * Usage
- * -----
- *  1. Call perf_timer_reset() once at startup (or via CLI).
- *  2. Wrap any code block with:
- *       uint32_t _t0 = perf_timer_start();
- *       ... code ...
- *       perf_timer_stop(PERF_SLOT_FOO, _t0);
- *  3. Enable reporting:  g_perf_enable = 1;
- *     The IMU task calls perf_timer_report_if_due() every loop iteration;
- *     it prints a one-liner over UART every PERF_REPORT_INTERVAL_LOOPS loops.
- *
- * All measurements are in microseconds (µs).
- * The module is zero-overhead when g_perf_enable == 0 — the slot counters
- * are simply not updated and the report is never sent.
- */
 #pragma once
 #include <stdint.h>
 

@@ -108,15 +108,16 @@ ak8963_status_t ak8963_read_raw(I2C_HandleTypeDef *hi2c, ak8963_raw_t *out_raw)
         return AK8963_OK;
     }
 
-    /* Burst-read HXL..HZH (6 bytes, little-endian) */
-    uint8_t buf[6];
-    if (i2c_read_reg(hi2c, AK8963_ADDR7, AK8963_REG_HXL, buf, 6, 50) != I2C_REG_OK)
+    /* Burst-read HXL..ST2 (7 bytes, little-endian data + status).
+     * AK8963 §6.4.3: ST2 MUST be read in the SAME I2C transaction as the
+     * data registers. A separate START between them violates the protocol
+     * and can corrupt the measurement latch. Registers 0x03..0x09 are
+     * contiguous: HXL(0x03), HXH, HYL, HYH, HZL, HZH, ST2(0x09). */
+    uint8_t buf[7];
+    if (i2c_read_reg(hi2c, AK8963_ADDR7, AK8963_REG_HXL, buf, 7, 50) != I2C_REG_OK)
         return AK8963_ERR_I2C;
 
-    /* MUST read ST2 to unlock next measurement */
-    uint8_t st2 = 0;
-    if (i2c_read_reg(hi2c, AK8963_ADDR7, AK8963_REG_ST2, &st2, 1, 50) != I2C_REG_OK)
-        return AK8963_ERR_I2C;
+    uint8_t st2 = buf[6]; /* ST2 is the 7th byte (index 6) */
 
     if (st2 & AK8963_ST2_HOFL)
     {

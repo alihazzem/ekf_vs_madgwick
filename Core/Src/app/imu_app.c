@@ -163,25 +163,20 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
       s_az_off[i] = ACCEL_BIAS_Z_1;
     }
 
-    // Madgwick init
+    // Madgwick init — all parameters sourced from app_config.h inside madgwick_init().
+    // The individual setter calls that used to follow here are now redundant.
     madgwick_init(&s_mad[i], MADGWICK_BETA);
-    madgwick_set_accel_reject(&s_mad[i],
-                              MADGWICK_ACCEL_REJECT_EN,
-                              MADGWICK_ACCEL_MIN_G,
-                              MADGWICK_ACCEL_MAX_G);
-    madgwick_set_bias_gain(&s_mad[i], MADGWICK_ZETA);
-    madgwick_set_adaptive_beta(&s_mad[i], MADGWICK_BETA_START, MADGWICK_BETA_DECAY_S);
-    madgwick_set_motion_gain(&s_mad[i], MADGWICK_BETA_MOTION_K, MADGWICK_BETA_MIN);
 
-    s_mad_valid[i] = 0;
+    s_mad_valid[i]   = 0;
     s_mad_aligned[i] = 0;
 
 #if RUN_EKF
+    // EKF init — all parameters (including accel-reject window) sourced from
+    // app_config.h inside ekf7_init().  The ekf7_set_accel_reject() call that
+    // used to follow here is now redundant.
     ekf7_init(&s_ekf[i], EKF_SIGMA_GYRO, EKF_SIGMA_BIAS, EKF_SIGMA_ACCEL, EKF_SIGMA_MAG,
               EKF_R_ADAPT_K, EKF_P0);
-    /* Hard-reject window configured via EKF_ACCEL_* (adaptive R still applies) */
-    ekf7_set_accel_reject(&s_ekf[i], EKF_ACCEL_REJECT_EN, EKF_ACCEL_MIN_G, EKF_ACCEL_MAX_G, EKF_ACCEL_TIMEOUT_S);
-    s_ekf_valid[i] = 0;
+    s_ekf_valid[i]   = 0;
     s_ekf_aligned[i] = 0;
 #endif
   }
@@ -428,9 +423,11 @@ void imu_app_step(void)
       {
         uint32_t t_mad0 = timebase_cycles();
 #if SENSOR_GY91
-        // Safety threshold: Only use mag if the calibrated norm is roughly Earth-like (5 to 100 uT).
-        // This protects the robot from spinning out if it drives over a strong magnet.
-        if (s_m_cal_norm[i] > 5.0f && s_m_cal_norm[i] < 100.0f)
+        // Safety threshold: Only use mag if DRDY is set AND the calibrated norm
+        // is roughly Earth-like (5 to 100 uT).
+        // Checking s_last_mag[i].valid (DRDY flag) prevents feeding stale samples
+        // from a previous cycle when the magnetometer hasn't refreshed yet.
+        if (s_last_mag[i].valid && s_m_cal_norm[i] > 5.0f && s_m_cal_norm[i] < 100.0f)
         {
           madgwick_update_marg(&s_mad[i], wx, wy, wz, ax_g, ay_g, az_g, s_mx_cal_ut[i], s_my_cal_ut[i], s_mz_cal_ut[i], dt_s);
         }
@@ -509,15 +506,15 @@ void imu_app_step(void)
     {
       for (int i = 0; i < NUM_IMUS; i++)
       {
-        // Madgwick fields
-        int32_t mad_r = s_mad_valid[i] ? (int32_t)(s_mad_att[i].roll_deg * 1000.0f) : 0;
-        int32_t mad_p = s_mad_valid[i] ? (int32_t)(-s_mad_att[i].pitch_deg * 1000.0f) : 0;
-        int32_t mad_y = s_mad_valid[i] ? (int32_t)(s_mad_att[i].yaw_deg * 1000.0f) : 0;
+        // Madgwick fields  (sign convention: positive = nose-up / right-bank / right-yaw)
+        int32_t mad_r = s_mad_valid[i] ? (int32_t)(s_mad_att[i].roll_deg  * 1000.0f) : 0;
+        int32_t mad_p = s_mad_valid[i] ? (int32_t)(s_mad_att[i].pitch_deg * 1000.0f) : 0;
+        int32_t mad_y = s_mad_valid[i] ? (int32_t)(s_mad_att[i].yaw_deg   * 1000.0f) : 0;
 
-        // EKF fields
-        int32_t ekf_r = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].roll_deg * 1000.0f) : 0;
-        int32_t ekf_p = s_ekf_valid[i] ? (int32_t)(-s_ekf_att[i].pitch_deg * 1000.0f) : 0;
-        int32_t ekf_y = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].yaw_deg * 1000.0f) : 0;
+        // EKF fields  (same sign convention as Madgwick and as Attitude_t struct)
+        int32_t ekf_r = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].roll_deg  * 1000.0f) : 0;
+        int32_t ekf_p = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].pitch_deg * 1000.0f) : 0;
+        int32_t ekf_y = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].yaw_deg   * 1000.0f) : 0;
 
         // Adaptive diagnostics (×1e6 to preserve float precision as integer)
         int32_t ekf_r_eff_n = s_ekf_valid[i]

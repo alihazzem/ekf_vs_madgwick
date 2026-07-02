@@ -1,35 +1,3 @@
-/**
- * @file display_task.c
- * @brief RTOS display task — consumer of the SystemState_t message queue.
- *
- * ARCHITECTURE (producer / consumer):
- *
- *  ┌─────────────────────────────────────────────────────────────────────┐
- *  │  IMU Task (osPriorityRealtime, 200 Hz)                              │
- *  │                                                                     │
- *  │  1. Compute pitch, roll, ccr_pitch, ccr_roll                        │
- *  │  2. Populate SystemState_t snapshot                                 │
- *  │  3. osMessageQueuePut(displayQueueHandle, &state, 0, 0)             │
- *  │                                                                     │
- *  │  timeout=0 ← THE KEY PROTECTION:                                   │
- *  │  If the display task hasn't consumed the previous message yet,      │
- *  │  osMessageQueuePut returns osErrorResource immediately.             │
- *  │  The IMU task drops the frame and continues its loop                │
- *  │  with ZERO blocking. The real-time deadline is never missed.        │
- *  └─────────────────────────────────────────────────────────────────────┘
- *                              │ Queue depth = 1
- *                              ▼
- *  ┌─────────────────────────────────────────────────────────────────────┐
- *  │  Display Task (osPriorityLow, ~10 Hz)                               │
- *  │                                                                     │
- *  │  1. osMessageQueueGet(displayQueueHandle, &state, 0, portMAX_DELAY) │
- *  │     → Blocks until the IMU task puts a new message                  │
- *  │  2. Render layout into ssd1306 framebuffer                          │
- *  │  3. ssd1306_flush(&hi2c2)                                           │
- *  │  4. osDelay(100ms) → caps refresh to max 10 Hz                     │
- *  └─────────────────────────────────────────────────────────────────────┘
- */
-
 #include "app/display_task.h"
 #include "drivers/ssd1306.h"
 
@@ -47,30 +15,6 @@ extern I2C_HandleTypeDef hi2c2;
 /* ── Message queue (depth = 1, holds one SystemState_t snapshot) ─────────── */
 osMessageQueueId_t displayQueueHandle = NULL;
 
-/* ── Display layout constants ────────────────────────────────────────────── */
-/*
- * 128×64 display, 6-pixel-wide characters (5px glyph + 1px gap), 8 pages.
- *
- * Layout (page = 8-pixel tall row):
- *
- *   Page 0:  ── Status line ─────────────────────────────────────────────
- *            "CALIBRATING" or "RUNNING"
- *
- *   Page 1:  ── Column headers ───────────────────────────────────────────
- *            "IMU0"                  "IMU1"
- *
- *   Page 2:  ── Pitch (both IMUs) ────────────────────────────────────────
- *            "0P:+12.3"            "1P:-5.2"
- *
- *   Page 3:  ── Roll (both IMUs) ─────────────────────────────────────────
- *            "0R:+45.6"            "1R:-30.1"
- *
- *   Page 4:  ── Pitch servo deg (both IMUs) ──────────────────────────────
- *            "0PS:+10d"            "1PS:-5d"
- *
- *   Page 5:  ── Roll servo deg (both IMUs) ───────────────────────────────
- *            "0RS:+15d"            "1RS:-10d"
- */
 #define COL_LEFT    0
 #define COL_RIGHT   64
 #define PAGE_STATUS 0

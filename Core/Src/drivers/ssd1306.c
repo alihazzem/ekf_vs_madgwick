@@ -1,11 +1,3 @@
-/**
- * @file ssd1306.c
- * @brief Lightweight SSD1306 128x64 OLED driver implementation.
- *
- * Framebuffer model: 1024-byte array indexed as [page * 128 + col].
- * ssd1306_flush() sends it all in one I2C transaction with a 0x40 prefix byte.
- */
-
 #include "drivers/ssd1306.h"
 #include <string.h>
 #include <stddef.h>

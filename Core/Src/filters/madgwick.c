@@ -1,5 +1,6 @@
 #include "filters/madgwick.h"
 #include "utils/math3d.h"
+#include "app/app_config.h"
 #include <math.h>
 
 #ifndef MADGWICK_EPS
@@ -16,24 +17,24 @@ void madgwick_init(madgwick_t *m, float beta)
   m->q3 = 0.0f;
   m->beta = beta;
 
-  m->accel_reject_en = false;
-  m->accel_reject_min_g = 0.85f;
-  m->accel_reject_max_g = 1.15f;
+  m->accel_reject_en = (bool)MADGWICK_ACCEL_REJECT_EN;
+  m->accel_reject_min_g = MADGWICK_ACCEL_MIN_G;
+  m->accel_reject_max_g = MADGWICK_ACCEL_MAX_G;
 
-  // gyro bias — disabled until madgwick_set_bias_gain() is called
+  // gyro bias — initialised from app_config.h
   m->gbx = 0.0f;
   m->gby = 0.0f;
   m->gbz = 0.0f;
-  m->zeta = 0.0f;
+  m->zeta = MADGWICK_ZETA;
 
-  // adaptive beta — disabled by default (same start as final)
+  // adaptive beta — driven by app_config.h
   m->elapsed_s = 0.0f;
-  m->beta_start = beta;   // identical => no ramp effect
-  m->beta_decay_s = 0.0f; // 0 => disabled
+  m->beta_start   = MADGWICK_BETA_START;   // fast-convergence initial beta
+  m->beta_decay_s = MADGWICK_BETA_DECAY_S; // ramp duration in seconds
 
-  // motion-adaptive beta — disabled by default
-  m->beta_motion_k = 0.0f;
-  m->beta_min = 0.0f;
+  // motion-adaptive beta — driven by app_config.h
+  m->beta_motion_k = MADGWICK_BETA_MOTION_K;
+  m->beta_min      = MADGWICK_BETA_MIN;
 }
 
 void madgwick_reset(madgwick_t *m)

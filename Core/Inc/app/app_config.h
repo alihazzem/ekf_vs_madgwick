@@ -6,7 +6,7 @@
  * 0 = legacy MPU-6050 (accel/gyro only, no magnetometer).
  * BMP280 on the GY-91 board is intentionally ignored in both cases.
  */
-#define SENSOR_GY91 0
+#define SENSOR_GY91 1
 
 /* ====== MPU-92xx SETTINGS (active when SENSOR_GY91 = 1) ====== */
 #define MPU9255_ADDR_7BIT 0x68 /* SAO/SDO low → 0x68, high → 0x69 */
@@ -25,7 +25,7 @@
 #define IMU_DT_S (1.0f / IMU_FS_HZ)
 
 /* ====== ENABLE/DISABLE FILTERS ====== */
-#define RUN_MADGWICK 0
+#define RUN_MADGWICK 1
 #define RUN_EKF 1
 
 /* ====== CONVERGENCE TEST (FAULT INJECTION) ======
@@ -38,7 +38,6 @@
 /* ====== LOGGING ====== */
 #define LOG_UART 1 // 1 = UART, 0 = SWO (later)
 #define LOG_HEADER_ONCE 1
-
 /* ====== MADGWICK PARAM ====== */
 #define MADGWICK_BETA 1.0f       // final/steady-state beta (increased for better tracking)
 #define MADGWICK_BETA_START 0.5f // initial beta for fast convergence
@@ -62,14 +61,24 @@
 #define EKF_MAG_NIS_GATE 20.0f    /* mag NIS gate (higher = fewer rejects) */
 #define EKF_MAG_RESIDUAL_MAX 1.5f /* max |y| before residual is scaled */
 
-#define EKF_P0                                                                \
-  1.0f /* initial P diagonal  (high = uncertain at start -> fast convergence) \
-        */
+#define EKF_P0     1.0f    /* initial P diagonal for quaternion states (high = fast convergence) */
+#define EKF_P0_BIAS 1e-4f  /* initial P diagonal for bias states (tighter — bias near zero at start) */
 
 #define EKF_ACCEL_REJECT_EN 1
 #define EKF_ACCEL_MIN_G 0.3f     /* reject if |a| < 0.3 g (free-fall / sensor fault) */
 #define EKF_ACCEL_MAX_G 4.0f     /* reject if |a| > 4.0 g (impact spikes)            */
 #define EKF_ACCEL_TIMEOUT_S 0.0f /* 0.0s = instant recovery when acceleration stops (no starvation) */
+
+#define EKF_BIAS_CLAMP_RAD_S 0.05f /* max absolute gyro bias estimate (rad/s) — ~2.9 deg/s */
+#define EKF_MAG_DQ_CLAMP     0.015f /* max quaternion correction per mag update component   */
+
+/* filter is considered converged when trace(P) drops below this value */
+#define EKF_CONVERGENCE_TRACE 0.05f
+
+/* divergence ceiling — auto-reset triggers if trace(P) exceeds this.
+ * Set to 100× EKF_P0: a healthy filter converges well below 1.0;
+ * exceeding 50.0 means numerical explosion from a sensor glitch. */
+#define EKF_MAX_TRACE         50.0f
 
 /* ====== MPU6050 SETTINGS ====== */
 #define NUM_IMUS 1          // Set to 1 for single IMU, 2 for dual IMU setup

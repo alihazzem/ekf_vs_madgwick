@@ -1,18 +1,3 @@
-/*
- * ekf.h — 7-State Extended Kalman Filter for attitude estimation
- *
- * State vector: x = [q0, q1, q2, q3, bx, by, bz]
- *   q0..q3  — unit quaternion (w, x, y, z)
- *   bx..bz  — gyro bias (rad/s, body frame), tracked online
- *
- * Predict: quaternion kinematics driven by gyro, bias modeled as random walk
- * Update : gravity direction observed via accelerometer, with adaptive R
- *          (measurement noise scales with |a| deviation from 1 g, so the EKF
- *           gracefully reduces accelerometer weight during dynamic motion
- *           instead of using a hard binary reject threshold)
- *
- */
-
 #ifndef INC_FILTERS_EKF_H_
 #define INC_FILTERS_EKF_H_
 
@@ -69,6 +54,37 @@ extern "C"
          * instance must track its own counter to avoid cross-IMU coupling). */
         uint32_t sym_ctr;
         uint32_t sym_ctr_mag;
+
+        /* Convergence / health flag ------------------------------------------ */
+        bool     healthy;     /* true once trace(P) < EKF_CONVERGENCE_TRACE        */
+        uint32_t healthy_ctr; /* consecutive steps below threshold (for hysteresis) */
+
+        /* -----------------------------------------------------------------------
+         * Per-instance scratch buffers.
+         *
+         * Previously these were module-level statics, which meant all EKF
+         * instances shared the same intermediate storage. That was safe only
+         * under a single-threaded super-loop calling each instance sequentially.
+         *
+         * Moving them here gives every ekf7_t instance its own scratch space so
+         * that two IMUs can be updated from different RTOS tasks (or interrupts)
+         * without corrupting each other's intermediate state.
+         *
+         * Memory cost: +1428 bytes per instance (predictable BSS, not stack).
+         * With NUM_IMUS=2 this adds ~2.9 KB — well within the STM32F4's 192 KB.
+         *
+         * Fields are prefixed with '_' to signal they are internal; do not access
+         * them directly from application code.
+         * ----------------------------------------------------------------------- */
+        float _F[7][7];    /* state-transition Jacobian                  */
+        float _FP[7][7];   /* F * P  (predict intermediate)              */
+        float _HP[3][7];   /* H * P  (update intermediate)               */
+        float _PHt[7][3];  /* P * H^T                                    */
+        float _K[7][3];    /* Kalman gain                                 */
+        float _A[7][7];    /* I - K*H  (Joseph form)                     */
+        float _AP[7][7];   /* A * P_prior  (Joseph form)                 */
+        float _Pnew[7][7]; /* updated covariance  (Joseph form output)   */
+        float _Pold[7][7]; /* copy of P_prior  (Joseph form input)       */
 
     } ekf7_t;
 
@@ -212,6 +228,13 @@ extern "C"
      *         Returns 0 before the first ekf7_update_accel() call.
      */
     float ekf7_get_r_eff(const ekf7_t *e);
+
+    /**
+     * @brief  Returns true once trace(P) has stayed below EKF_CONVERGENCE_TRACE
+     *         for at least 10 consecutive update steps, indicating the filter
+     *         has converged and the quaternion estimate is trustworthy.
+     */
+    bool ekf7_is_healthy(const ekf7_t *e);
 
 #ifdef __cplusplus
 }

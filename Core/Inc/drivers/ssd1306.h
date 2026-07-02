@@ -1,13 +1,3 @@
-/**
- * @file ssd1306.h
- * @brief Lightweight SSD1306 128x64 OLED driver over STM32 HAL I2C.
- *
- * This driver maintains a full 128x64 / 8 = 1024-byte framebuffer in RAM.
- * Call ssd1306_clear() to blank it, draw with the helper functions, then
- * call ssd1306_flush() to DMA the buffer to the display via I2C.
- *
- * Only ASCII characters 32-127 are supported via a built-in 5x7 font.
- */
 #ifndef DRIVERS_SSD1306_H
 #define DRIVERS_SSD1306_H
 
