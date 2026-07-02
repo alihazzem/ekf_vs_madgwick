@@ -537,7 +537,7 @@ void imu_app_step(void)
                        "%ld,%ld,%ld,%lu,"
                        "%ld,%ld,%ld,%ld,%ld\r\n",
                        /* time */
-                       (unsigned long)HAL_GetTick(),
+                       (unsigned long)timebase_cycles_to_us(timebase_cycles()),
                        (int)i,
                        /* raw sensor */
                        (int)s_last[i].ax, (int)s_last[i].ay, (int)s_last[i].az,

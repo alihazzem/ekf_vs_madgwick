@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "FreeRTOS.h"
+#include "app/app_config.h"
 #include "app/cli_app.h"
 #include "app/imu_app.h"
 #include "drivers/uart_cli.h"
@@ -357,7 +358,9 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 8399;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 49;
+  /* Timer clock = 84MHz / (8399+1) = 10,000 Hz.
+   * Period = (10000 / IMU_FS_HZ) - 1 */
+  htim2.Init.Period = (uint32_t)(10000.0f / IMU_FS_HZ) - 1;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
