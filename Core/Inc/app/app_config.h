@@ -6,7 +6,7 @@
  * 0 = legacy MPU-6050 (accel/gyro only, no magnetometer).
  * BMP280 on the GY-91 board is intentionally ignored in both cases.
  */
-#define SENSOR_GY91 1
+#define SENSOR_GY91 0
 
 /* ====== MPU-92xx SETTINGS (active when SENSOR_GY91 = 1) ====== */
 #define MPU9255_ADDR_7BIT 0x68 /* SAO/SDO low → 0x68, high → 0x69 */
@@ -25,7 +25,7 @@
 #define IMU_DT_S (1.0f / IMU_FS_HZ)
 
 /* ====== ENABLE/DISABLE FILTERS ====== */
-#define RUN_MADGWICK 1
+#define RUN_MADGWICK 0
 #define RUN_EKF 1
 
 /* ====== CONVERGENCE TEST (FAULT INJECTION) ======

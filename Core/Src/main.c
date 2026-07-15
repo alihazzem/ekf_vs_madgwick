@@ -840,7 +840,7 @@ static void imu_task_fn(void *arg)
 #endif
         {
           /* IMU 0 (or IMU 1 when IMU1_RAW_ACCEL=0): full deadzone + EMA pipeline */
-#define PITCH_DEADZONE_DEG 1.0f
+#define PITCH_DEADZONE_DEG 2.0f
 #define ROLL_DEADZONE_DEG 2.0f
 
           if (fabsf(pitch_deg) < PITCH_DEADZONE_DEG)

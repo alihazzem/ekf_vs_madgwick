@@ -39,7 +39,7 @@ static int m33_inv(const float A[3][3], float Ainv[3][3])
 {
     float d = A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1]) - A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0]) + A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]);
 
-    if (d > -1e-12f && d < 1e-12f)
+    if (fabsf(d) < 1e-12f)
         return 0;
 
     float id = 1.0f / d;
@@ -495,7 +495,11 @@ void ekf7_predict(ekf7_t *e, float wx, float wy, float wz, float dt_s)
      * Bias block: sigma_bias^2 * dt * I_3  (unchanged, independent noise). */
     {
         const float q0 = e->q[0], q1 = e->q[1], q2 = e->q[2], q3 = e->q[3];
-        const float qv = e->sigma_gyro * e->sigma_gyro * dt_s;
+        const float qv =
+            0.25f *
+            e->sigma_gyro *
+            e->sigma_gyro *
+            dt_s;
 
         /* Diagonal: qv * (1 - q_i^2) */
         e->P[0][0] += qv * (1.0f - q0 * q0);
@@ -749,7 +753,12 @@ void ekf7_update_mag(ekf7_t *e, float mx, float my, float mz)
 
     if (!e->mag_ref_valid)
     {
-        e->mag_ref_valid = ekf7_set_mag_reference_from_body(e, mx, my, mz);
+        if (!e->healthy)
+            return;
+
+        e->mag_ref_valid =
+            ekf7_set_mag_reference_from_body(e,mx,my,mz);
+
         return;
     }
 
