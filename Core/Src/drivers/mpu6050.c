@@ -38,7 +38,7 @@ mpu6050_status_t mpu6050_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6
   // 3) Sample rate: with DLPF enabled, internal gyro rate = 1 kHz
   //    Output rate = 1000 / (1 + SMPLRT_DIV)
   //    For 1000 Hz => SMPLRT_DIV = 0  (hardware maximum with DLPF active)
-  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_SMPLRT_DIV, 0u, 50) != I2C_REG_OK)
+  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_SMPLRT_DIV, 0x01u, 50) != I2C_REG_OK)
     return MPU6050_ERR_I2C;
 
   // 4) DLPF (CONFIG): 98 Hz gyro bandwidth (DLPF_CFG=2).
@@ -47,8 +47,11 @@ mpu6050_status_t mpu6050_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6
   if (i2c_write_reg(hi2c, addr7, MPU6050_REG_CONFIG, 0x02u, 50) != I2C_REG_OK)
     return MPU6050_ERR_I2C;
 
-  // 5) Gyro full-scale: ±250 dps (FS_SEL=0)
-  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_GYRO_CONFIG, 0x00u, 50) != I2C_REG_OK)
+  // 5) Gyro full-scale: ±1000 dps (FS_SEL=2, 32.8 LSB/dps)
+  //    ±250 dps saturates at ~250 deg/s; a fast wrist roll can easily exceed
+  //    this, clipping the gyro and permanently corrupting the quaternion.
+  //    ±1000 dps is a practical upper bound for wrist/arm motion.
+  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_GYRO_CONFIG, 0x10u, 50) != I2C_REG_OK)
     return MPU6050_ERR_I2C;
 
   // 6) Accel full-scale: ±2g (AFS_SEL=0)

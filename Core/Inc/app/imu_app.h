@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include "FreeRTOS.h"
 #include "semphr.h"
+#include "cmsis_os.h"
 
 #if SENSOR_GY91
 #include "drivers/ak8963.h"
@@ -18,6 +19,13 @@ extern "C" {
 #endif
 
 extern SemaphoreHandle_t g_i2c_mutex;
+
+/* ── Non-blocking log queue (IMU task → log task) ──────────────────────────
+ * Each entry holds one pre-formatted CSV line (EKF angles only).
+ * The IMU task posts here; a low-priority log_task_fn drains it via UART. */
+#define LOG_LINE_MAX 96U
+typedef struct { char line[LOG_LINE_MAX]; } LogLine_t;
+extern osMessageQueueId_t logQueueHandle;
 
 typedef struct
 {

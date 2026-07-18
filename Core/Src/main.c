@@ -100,6 +100,7 @@ void StartDefaultTask(void *argument);
 /* USER CODE BEGIN PFP */
 static void imu_task_fn(void *arg);
 static void cli_task_fn(void *arg);
+static void log_task_fn(void *arg);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -246,6 +247,12 @@ int main(void)
    * osMessageQueuePut with timeout=0 returns immediately if full —
    * the real-time loop is never blocked by the low-priority display task. */
   displayQueueHandle = osMessageQueueNew(1, sizeof(SystemState_t), NULL);
+
+  /* Log queue: IMU task posts pre-formatted EKF CSV lines here (non-blocking).
+   * log_task_fn drains it via blocking UART at osPriorityBelowNormal.
+   * Depth=16 absorbs ~16ms of burst (2 IMUs × 500Hz = 1000 lines/s, UART
+   * at 921600 handles ~1300 lines/s of 35-char lines — ample headroom). */
+  logQueueHandle = osMessageQueueNew(16, sizeof(LogLine_t), NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -267,8 +274,16 @@ int main(void)
   /* Display task: low priority, 512-word stack, renders OLED at ~10 Hz */
   osThreadNew(display_task_fn, NULL,
               &(osThreadAttr_t){.name = "DISP",
-                                .priority = osPriorityLow,
-                                .stack_size = 512 * 4});
+                               .priority = osPriorityLow,
+                               .stack_size = 512 * 4});
+
+  /* Log task: drains logQueueHandle via blocking UART TX.
+   * Runs below-normal priority so it never competes with the IMU loop.
+   * Stack: 256 words — only needs uart_cli_send + local LogLine_t (64B). */
+  osThreadNew(log_task_fn, NULL,
+              &(osThreadAttr_t){.name = "LOG",
+                               .priority = osPriorityBelowNormal,
+                               .stack_size = 256 * 4});
 
   // osThreadNew(motor_test_task_fn, NULL, &(osThreadAttr_t){
   //     .name       = "MotorTest",
@@ -605,6 +620,23 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
   __BKPT(0);
 }
 
+/* ── Log task: drains logQueueHandle and sends pre-formatted lines via UART ──
+ * Runs at osPriorityBelowNormal so the real-time IMU loop is never blocked.
+ * The IMU task merely does snprintf + osMessageQueuePut (~10 µs) and       *
+ * returns immediately even if UART is still transmitting the previous line. */
+static void log_task_fn(void *arg)
+{
+  (void)arg;
+  LogLine_t entry;
+  while (1)
+  {
+    if (osMessageQueueGet(logQueueHandle, &entry, NULL, portMAX_DELAY) == osOK)
+    {
+      uart_cli_send(entry.line);
+    }
+  }
+}
+
 /* USER CODE END 4 */
 
 #if STACK_TUNING_MODE
@@ -783,7 +815,7 @@ static void imu_task_fn(void *arg)
           q_ref[i][3] = ekf_att[i].q3;
         }
       }
-      rezero_flash_count = 200U; /* Flash display for 1 second */
+      rezero_flash_count = (uint32_t)IMU_FS_HZ; /* Flash display for 1 second */
     }
     if (rezero_flash_count > 0U)
       rezero_flash_count--;
@@ -1168,7 +1200,7 @@ static void MX_I2C2_Init(void)
 
   /* Configure I2C2 peripheral */
   hi2c2.Instance = I2C2;
-  hi2c2.Init.ClockSpeed = 100000U; /* 400 kHz Fast-Mode */
+  hi2c2.Init.ClockSpeed = 400000U; /* 400 kHz Fast-Mode */
   hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c2.Init.OwnAddress1 = 0;
   hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;

@@ -551,10 +551,19 @@ void ekf7_predict(ekf7_t *e, float wx, float wy, float wz, float dt_s)
      * Bias block: sigma_bias^2 * dt * I_3  (unchanged, independent noise). */
     {
         const float q0 = e->q[0], q1 = e->q[1], q2 = e->q[2], q3 = e->q[3];
+        
+        /* Dynamic P inflation: increase gyro variance when spinning fast.
+         * This keeps trace(P) artificially high during fast motion, which
+         * keeps the Kalman gain (K) large. This ensures that the filter
+         * aggressively snaps back to the accelerometer reference immediately
+         * after a fast motion stops, fixing "sticky" wrong angles. */
+        float omega_norm = sqrtf(wx_c * wx_c + wy_c * wy_c + wz_c * wz_c);
+        float dyn_sigma_gyro = e->sigma_gyro + (0.05f * omega_norm);
+
         const float qv =
             0.25f *
-            e->sigma_gyro *
-            e->sigma_gyro *
+            dyn_sigma_gyro *
+            dyn_sigma_gyro *
             dt_s;
 
         /* Diagonal: qv * (1 - q_i^2) */

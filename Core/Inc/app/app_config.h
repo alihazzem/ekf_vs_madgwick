@@ -21,7 +21,7 @@
 #define AK8963_ADDR_7BIT 0x0C /* Fixed address, not user-configurable */
 
 /* ====== SAMPLE RATE ====== */
-#define IMU_FS_HZ 1000.0f
+#define IMU_FS_HZ 500.0f
 #define IMU_DT_S (1.0f / IMU_FS_HZ)
 
 /* ====== ENABLE/DISABLE FILTERS ====== */
@@ -52,14 +52,14 @@
  * values. Tune at runtime with: EKF TUNE <sigma_gyro> <sigma_bias>
  * <sigma_accel> <sigma_mag> <r_adapt_k>
  */
-#define EKF_SIGMA_GYRO 0.002f     /* gyro noise density  rad/s/sqrt(Hz)  */
+#define EKF_SIGMA_GYRO 0.005f     /* gyro noise density  rad/s/sqrt(Hz) — widened for fast-motion recovery */
 #define EKF_SIGMA_BIAS 6.3e-5f    /* bias random-walk    rad/s^2/sqrt(Hz) */
 #define EKF_SIGMA_ACCEL 0.05f     /* accel noise density g/sqrt(Hz)       */
 #define EKF_SIGMA_MAG 8.0f        /* stability-first mag trust (slower yaw lock) */
-#define EKF_R_ADAPT_K 1000.0f     /* adaptive-R steepness: heavily down-weights lateral accelerations */
-#define EKF_BIAS_MAX_DEV_G 0.15f  /* freeze bias update if |a|-1g exceeds this */
+#define EKF_R_ADAPT_K 200.0f      /* adaptive-R steepness — reduced so accel correction recovers faster after fast motion */
+#define EKF_BIAS_MAX_DEV_G 0.30f  /* freeze bias update if |a|-1g exceeds this — raised to allow re-convergence */
 #define EKF_MAG_NIS_GATE   20.0f  /* mag NIS gate  — chi2(3) 99.9th pct ≈ 16.3 */
-#define EKF_ACCEL_NIS_GATE 16.3f  /* accel NIS gate — chi2(3) 99.9th pct        */
+#define EKF_ACCEL_NIS_GATE 30.0f  /* accel NIS gate — raised from 16.3 so fast-roll corrections are not fully blocked */
 #define EKF_MAG_RESIDUAL_MAX 1.5f /* max |y| before residual is scaled */
 
 #define EKF_P0     1.0f    /* initial P diagonal for quaternion states (high = fast convergence) */
@@ -82,7 +82,7 @@
 #define EKF_MAX_TRACE         50.0f
 
 /* ====== MPU6050 SETTINGS ====== */
-#define NUM_IMUS 1          // Set to 1 for single IMU, 2 for dual IMU setup
+#define NUM_IMUS 2          // Set to 1 for single IMU, 2 for dual IMU setup
 #define MPU6050_ADDR_0 0x68 // IMU 0: AD0=GND → 0x68
 #define MPU6050_ADDR_1 0x69 // IMU 1: AD0=VCC → 0x69
 

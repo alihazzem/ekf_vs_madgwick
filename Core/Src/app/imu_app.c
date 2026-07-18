@@ -9,6 +9,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
+#include "cmsis_os.h"
 
 #if SENSOR_GY91
 #include "drivers/mpu9255.h"
@@ -18,11 +19,15 @@
 #endif
 
 #include <string.h>
-#include <math.h> /* sqrtf for mag norm */
+#include <math.h>   /* sqrtf for mag norm */
+#include <stdio.h>  /* snprintf for log queue entries */
 
 static I2C_HandleTypeDef *s_hi2c = NULL;
 
 SemaphoreHandle_t g_i2c_mutex = NULL;
+
+/* Log queue — defined here, created in main.c before the scheduler starts */
+osMessageQueueId_t logQueueHandle = NULL;
 
 static volatile bool s_stream_en = false;
 
@@ -98,7 +103,7 @@ static int16_t s_ay_off[NUM_IMUS] = {0};
 static int16_t s_az_off[NUM_IMUS] = {0};
 
 static const float ACC_LSB_PER_G = 16384.0f;
-static const float GYRO_LSB_PER_DPS = 131.0f;
+static const float GYRO_LSB_PER_DPS = 32.8f;   /* ±1000 dps, FS_SEL=2 (was 131.0 for ±250 dps) */
 static const float DEG2RAD = 0.017453292519943295f;
 
 void imu_app_init(I2C_HandleTypeDef *hi2c)
@@ -487,70 +492,32 @@ void imu_app_step(void)
 #endif
     } // End of IMU loop
 
-    // ---- optional streaming print (decimated) ----
-    // CSV format (21 fields):
-    //  D, t_ms, imu_idx,
-    //  ax_raw, ay_raw, az_raw, gx_raw, gy_raw, gz_raw,  (int16 sensor counts)
-    //  mad_roll_mdeg, mad_pitch_mdeg, mad_yaw_mdeg,      (Madgwick output, mdeg)
-    //  mad_us,                                           (Madgwick step CPU time µs)
-    //  ekf_roll_mdeg, ekf_pitch_mdeg, ekf_yaw_mdeg,      (EKF output, mdeg)
-    //  ekf_us,                                           (EKF step CPU time µs)
-    //  ekf_r_eff_n,                                      (EKF adaptive R ×1e6)
-    //  mad_beta_eff_n,                                   (Madgwick adaptive β ×1e6)
-    //  ekf_bx_n, ekf_by_n, ekf_bz_n                     (EKF gyro bias ×1e6 rad/s)
-    //
-    // Columns are 0 when the respective filter is disabled or not yet valid.
-    // The "D," prefix lets capture scripts ignore CLI chatter lines.
-    // One line per IMU when NUM_IMUS > 1.
+    // ---- optional streaming: EKF angles only (non-blocking queue post) ----
+    // CSV format: t_us, imu_idx, ekf_roll_mdeg, ekf_pitch_mdeg, ekf_yaw_mdeg
+    // Posted to logQueueHandle; log_task_fn drains via UART at low priority.
     if (s_print_div != 0 && (s_sample_count % s_print_div) == 0)
     {
+      uint32_t t_now = timebase_cycles_to_us(timebase_cycles());
       for (int i = 0; i < NUM_IMUS; i++)
       {
-        // Madgwick fields  (sign convention: positive = nose-up / right-bank / right-yaw)
-        int32_t mad_r = s_mad_valid[i] ? (int32_t)(s_mad_att[i].roll_deg  * 1000.0f) : 0;
-        int32_t mad_p = s_mad_valid[i] ? (int32_t)(s_mad_att[i].pitch_deg * 1000.0f) : 0;
-        int32_t mad_y = s_mad_valid[i] ? (int32_t)(s_mad_att[i].yaw_deg   * 1000.0f) : 0;
-
-        // EKF fields  (same sign convention as Madgwick and as Attitude_t struct)
         int32_t ekf_r = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].roll_deg  * 1000.0f) : 0;
         int32_t ekf_p = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].pitch_deg * 1000.0f) : 0;
         int32_t ekf_y = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].yaw_deg   * 1000.0f) : 0;
 
-        // Adaptive diagnostics (×1e6 to preserve float precision as integer)
-        int32_t ekf_r_eff_n = s_ekf_valid[i]
-                                  ? (int32_t)(ekf7_get_r_eff(&s_ekf[i]) * 1000000.0f)
-                                  : 0;
-        int32_t mad_beta_n = s_mad_valid[i]
-                                 ? (int32_t)(madgwick_get_beta_eff(&s_mad[i]) * 1000000.0f)
-                                 : 0;
-
-        // EKF gyro bias (rad/s ×1e6)
-        float ekf_b[3] = {0.0f, 0.0f, 0.0f};
-        if (s_ekf_valid[i])
-          ekf7_get_bias(&s_ekf[i], ekf_b);
-        int32_t ekf_bx_n = (int32_t)(ekf_b[0] * 1000000.0f);
-        int32_t ekf_by_n = (int32_t)(ekf_b[1] * 1000000.0f);
-        int32_t ekf_bz_n = (int32_t)(ekf_b[2] * 1000000.0f);
-
-        uart_cli_sendf("D,%lu,%d,%d,%d,%d,%d,%d,%d,"
-                       "%ld,%ld,%ld,%lu,"
-                       "%ld,%ld,%ld,%lu,"
-                       "%ld,%ld,%ld,%ld,%ld\r\n",
-                       /* time */
-                       (unsigned long)timebase_cycles_to_us(timebase_cycles()),
-                       (int)i,
-                       /* raw sensor */
-                       (int)s_last[i].ax, (int)s_last[i].ay, (int)s_last[i].az,
-                       (int)s_last[i].gx, (int)s_last[i].gy, (int)s_last[i].gz,
-                       /* Madgwick Euler */
-                       (long)mad_r, (long)mad_p, (long)mad_y,
-                       (unsigned long)s_mad_last_us[i],
-                       /* EKF Euler */
-                       (long)ekf_r, (long)ekf_p, (long)ekf_y,
-                       (unsigned long)s_ekf_last_us[i],
-                       /* Adaptive diagnostics */
-                       (long)ekf_r_eff_n, (long)mad_beta_n,
-                       (long)ekf_bx_n, (long)ekf_by_n, (long)ekf_bz_n);
+        if (logQueueHandle != NULL)
+        {
+          LogLine_t entry;
+          snprintf(entry.line, sizeof(entry.line),
+                   "%lu,%d,%d,%d,%d,%d,%d,%d,%ld,%ld,%ld\r\n",
+                   (unsigned long)t_now, i,
+                   /* raw sensor */
+                   (int)s_last[i].ax, (int)s_last[i].ay, (int)s_last[i].az,
+                   (int)s_last[i].gx, (int)s_last[i].gy, (int)s_last[i].gz,
+                   /* EKF Euler angles */
+                   (long)ekf_r, (long)ekf_p, (long)ekf_y);
+          /* Non-blocking: drop silently if the log task is falling behind */
+          osMessageQueuePut(logQueueHandle, &entry, 0U, 0U);
+        }
       }
     }
   }

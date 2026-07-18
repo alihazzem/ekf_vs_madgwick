@@ -28,6 +28,11 @@ void display_task_fn(void *arg)
 {
     (void)arg;
 
+    /* SSD1306 needs ≥100 ms after VDD stable before accepting commands.
+     * Without this delay init is unreliable, especially at 500 Hz where
+     * the FreeRTOS scheduler starts faster than at lower sample rates. */
+    osDelay(120U);
+
     /* Initialize the OLED over the dedicated hi2c2 bus */
     ssd1306_init(&hi2c2);
     ssd1306_clear();
