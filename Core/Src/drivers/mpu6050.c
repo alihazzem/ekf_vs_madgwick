@@ -35,14 +35,16 @@ mpu6050_status_t mpu6050_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6
 
   HAL_Delay(10);
 
-  // 3) Sample rate: with DLPF enabled, internal rate = 1kHz
+  // 3) Sample rate: with DLPF enabled, internal gyro rate = 1 kHz
   //    Output rate = 1000 / (1 + SMPLRT_DIV)
-  //    For 200 Hz => SMPLRT_DIV = 4
-  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_SMPLRT_DIV, 4u, 50) != I2C_REG_OK)
+  //    For 1000 Hz => SMPLRT_DIV = 0  (hardware maximum with DLPF active)
+  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_SMPLRT_DIV, 0u, 50) != I2C_REG_OK)
     return MPU6050_ERR_I2C;
 
-  // 4) DLPF (CONFIG): choose a safe moderate filter (DLPF_CFG=3)
-  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_CONFIG, 0x03u, 50) != I2C_REG_OK)
+  // 4) DLPF (CONFIG): 98 Hz gyro bandwidth (DLPF_CFG=2).
+  //    CFG=3 (42 Hz) was chosen for 200 Hz; at 500 Hz a wider bandwidth
+  //    preserves fast transients the EKF needs to track quick wrist motion.
+  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_CONFIG, 0x02u, 50) != I2C_REG_OK)
     return MPU6050_ERR_I2C;
 
   // 5) Gyro full-scale: ±250 dps (FS_SEL=0)

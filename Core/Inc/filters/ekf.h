@@ -34,7 +34,8 @@ extern "C"
         /* Magnetometer reference / gating ----------------------------------- */
         float mag_ref_n[3]; /* earth-frame magnetic direction (unit)       */
         bool mag_ref_valid; /* set after ekf7_init_from_marg or first mag  */
-        float mag_nis_gate; /* reject when NIS = y^T S^-1 y exceeds this   */
+        float mag_nis_gate;   /* reject mag when NIS = y^T S^-1 y > this  */
+        float accel_nis_gate; /* reject accel when NIS > this              */
 
         /* Adaptive R tuning -------------------------------------------------- */
         float r_adapt_k; /* R_eff = sigma_accel^2 * (1 + r_adapt_k * dev^2)

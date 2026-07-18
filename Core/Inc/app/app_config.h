@@ -21,7 +21,7 @@
 #define AK8963_ADDR_7BIT 0x0C /* Fixed address, not user-configurable */
 
 /* ====== SAMPLE RATE ====== */
-#define IMU_FS_HZ 200.0f
+#define IMU_FS_HZ 1000.0f
 #define IMU_DT_S (1.0f / IMU_FS_HZ)
 
 /* ====== ENABLE/DISABLE FILTERS ====== */
@@ -58,7 +58,8 @@
 #define EKF_SIGMA_MAG 8.0f        /* stability-first mag trust (slower yaw lock) */
 #define EKF_R_ADAPT_K 1000.0f     /* adaptive-R steepness: heavily down-weights lateral accelerations */
 #define EKF_BIAS_MAX_DEV_G 0.15f  /* freeze bias update if |a|-1g exceeds this */
-#define EKF_MAG_NIS_GATE 20.0f    /* mag NIS gate (higher = fewer rejects) */
+#define EKF_MAG_NIS_GATE   20.0f  /* mag NIS gate  — chi2(3) 99.9th pct ≈ 16.3 */
+#define EKF_ACCEL_NIS_GATE 16.3f  /* accel NIS gate — chi2(3) 99.9th pct        */
 #define EKF_MAG_RESIDUAL_MAX 1.5f /* max |y| before residual is scaled */
 
 #define EKF_P0     1.0f    /* initial P diagonal for quaternion states (high = fast convergence) */

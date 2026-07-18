@@ -200,6 +200,18 @@ static void ekf7_cov_update_joseph(ekf7_t *e, const float H[3][7], float r_val)
         }
 
     memcpy(e->P, e->_Pnew, sizeof(e->P));
+
+    /* Fix #3 — enforce symmetry after every Joseph update.
+     * The Joseph form is symmetric in exact arithmetic, but float rounding
+     * accumulates small asymmetry over many steps.  Averaging P and Pᵀ
+     * costs 21 additions and prevents divergence of the off-diagonal terms. */
+    for (int i = 0; i < 7; i++)
+        for (int j = i + 1; j < 7; j++)
+        {
+            float avg = 0.5f * (e->P[i][j] + e->P[j][i]);
+            e->P[i][j] = avg;
+            e->P[j][i] = avg;
+        }
 }
 
 /* -----------------------------------------------------------------------
@@ -229,8 +241,9 @@ void ekf7_init(ekf7_t *e,
     e->mag_ref_n[2] = 0.0f;
     e->mag_ref_valid = false;
 
-    /* Mag NIS gate — from app_config.h. */
-    e->mag_nis_gate = EKF_MAG_NIS_GATE;
+    /* NIS gates — from app_config.h. */
+    e->mag_nis_gate   = EKF_MAG_NIS_GATE;
+    e->accel_nis_gate = EKF_ACCEL_NIS_GATE;
 
     /* Accel hard-reject window — from app_config.h (B1 + B2 fix). */
     e->accel_reject_en      = (bool)EKF_ACCEL_REJECT_EN;
@@ -445,21 +458,64 @@ void ekf7_predict(ekf7_t *e, float wx, float wy, float wz, float dt_s)
     e->_F[5][5] = 1.0f;
     e->_F[6][6] = 1.0f;
 
-    /* Propagate quaternion: q_new = F_qq * q */
-    float q_new[4] = {0};
-    for (int i = 0; i < 4; i++)
-        for (int j = 0; j < 4; j++)
-            q_new[i] += e->_F[i][j] * e->q[j];
-
-    float qn2 = q_new[0] * q_new[0] + q_new[1] * q_new[1] +
-                 q_new[2] * q_new[2] + q_new[3] * q_new[3];
-    if (qn2 > 1e-18f)
+    /* Fix #2 — Exact exponential quaternion propagation.
+     *
+     * Kinematics: q̇ = 0.5 · q ⊗ [0, ω_c]  (body-frame right-product convention)
+     * Exact solution for constant ω over [t, t+dt]:
+     *
+     *   dq = [ cos(|ω|dt/2),  sin(|ω|dt/2)/|ω| · ω_c ]
+     *   q_new = q ⊗ dq
+     *
+     * Reduces to the first-order Euler step as |ω|→0, removing O(dt²) error
+     * that accumulates with the previous matrix-multiply approximation.
+     *
+     * When |ω|·dt/2 is tiny we use the Taylor series for sin(x)/x → 1 − x²/6
+     * to avoid catastrophic cancellation in sinf/cosf near zero. */
     {
-        float qi = math3d_inv_sqrtf(qn2);
-        e->q[0] = q_new[0] * qi;
-        e->q[1] = q_new[1] * qi;
-        e->q[2] = q_new[2] * qi;
-        e->q[3] = q_new[3] * qi;
+        float omega_norm = sqrtf(wx_c * wx_c + wy_c * wy_c + wz_c * wz_c);
+        float half_angle = omega_norm * 0.5f * dt_s;
+        float c, s;
+        if (half_angle > 1e-4f)
+        {
+            c = cosf(half_angle);
+            s = sinf(half_angle) / omega_norm;
+        }
+        else
+        {
+            /* 4th-order Taylor: cos(x)≈1−x²/2,  sinc(x)≈1−x²/6 */
+            float ha2 = half_angle * half_angle;
+            c = 1.0f - 0.5f * ha2;
+            s = 0.5f * dt_s * (1.0f - ha2 * (1.0f / 6.0f));
+        }
+        float sx = wx_c * s, sy = wy_c * s, sz = wz_c * s;
+
+        /* q_new = q ⊗ dq where dq = [c, sx, sy, sz] */
+        float q_new[4];
+        q_new[0] = q0 * c  - q1 * sx - q2 * sy - q3 * sz;
+        q_new[1] = q0 * sx + q1 * c  + q2 * sz - q3 * sy;
+        q_new[2] = q0 * sy - q1 * sz + q2 * c  + q3 * sx;
+        q_new[3] = q0 * sz + q1 * sy - q2 * sx + q3 * c;
+
+        float qn2 = q_new[0] * q_new[0] + q_new[1] * q_new[1] +
+                    q_new[2] * q_new[2] + q_new[3] * q_new[3];
+        if (qn2 > 1e-18f)
+        {
+            float qi = math3d_inv_sqrtf(qn2);
+            e->q[0] = q_new[0] * qi;
+            e->q[1] = q_new[1] * qi;
+            e->q[2] = q_new[2] * qi;
+            e->q[3] = q_new[3] * qi;
+        }
+
+        /* Fix #23 — canonical hemisphere: keep q0 ≥ 0 to prevent sign
+         * flips during continuous rotation (Euler extraction is symmetric). */
+        if (e->q[0] < 0.0f)
+        {
+            e->q[0] = -e->q[0];
+            e->q[1] = -e->q[1];
+            e->q[2] = -e->q[2];
+            e->q[3] = -e->q[3];
+        }
     }
 
     /* P = F * P * F^T + Q */
@@ -620,6 +676,19 @@ void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g, float dt_s
     if (!m33_inv(S, Sinv))
         return;
 
+    /* Fix #5 — NIS gating for accelerometer (mirrors the magnetometer path).
+     * Statistically optimal outlier rejection using the normalized innovation
+     * squared.  Replaces the coarse magnitude-only window used previously.
+     * Gate value EKF_ACCEL_NIS_GATE is tunable in app_config.h. */
+    {
+        float nis = 0.0f;
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                nis += y[i] * Sinv[i][j] * y[j];
+        if (nis > e->accel_nis_gate)
+            return;
+    }
+
     /* _PHt = P * H^T  (7×3) — exploit H[4..6] = 0 */
     for (int i = 0; i < 7; i++)
         for (int m = 0; m < 3; m++)
@@ -677,6 +746,15 @@ void ekf7_update_accel(ekf7_t *e, float ax_g, float ay_g, float az_g, float dt_s
         e->q[1] *= qi;
         e->q[2] *= qi;
         e->q[3] *= qi;
+    }
+
+    /* Fix #23 — canonical hemisphere after accel update */
+    if (e->q[0] < 0.0f)
+    {
+        e->q[0] = -e->q[0];
+        e->q[1] = -e->q[1];
+        e->q[2] = -e->q[2];
+        e->q[3] = -e->q[3];
     }
 
     ekf7_cov_update_joseph(e, H, r_val);
@@ -772,17 +850,16 @@ void ekf7_update_mag(ekf7_t *e, float mx, float my, float mz)
     /* Innovation */
     float y[3] = {mx - h[0], my - h[1], mz - h[2]};
 
-    /* Residual scaling: keep large errors from dominating while still
-     * allowing yaw recovery after high-accel divergence. */
-    float y_norm2 = y[0] * y[0] + y[1] * y[1] + y[2] * y[2];
-    float y_norm = sqrtf(y_norm2);
-    if (y_norm > EKF_MAG_RESIDUAL_MAX)
-    {
-        float s = EKF_MAG_RESIDUAL_MAX / y_norm;
-        y[0] *= s;
-        y[1] *= s;
-        y[2] *= s;
-    }
+    /* Fix #6 — Remove residual clipping before NIS gate.
+     *
+     * The previous code clipped y, then computed S, then checked NIS on the
+     * already-clipped y — meaning the NIS test was applied to a falsified
+     * innovation, defeating its statistical meaning.
+     *
+     * Strategy: compute S and NIS on the raw (unclipped) innovation.  If NIS
+     * passes, the update uses the raw y so the Kalman gain does the right job.
+     * Outliers that would have been clipped are now rejected by NIS instead,
+     * which is the statistically correct approach. */
 
     /* Analytic Jacobian H (3×7) — closed-form, ~8× fewer FLOPs than numeric. */
     float H[3][7];
@@ -886,6 +963,15 @@ void ekf7_update_mag(ekf7_t *e, float mx, float my, float mz)
         e->q[1] *= qi;
         e->q[2] *= qi;
         e->q[3] *= qi;
+    }
+
+    /* Fix #23 — canonical hemisphere after mag update */
+    if (e->q[0] < 0.0f)
+    {
+        e->q[0] = -e->q[0];
+        e->q[1] = -e->q[1];
+        e->q[2] = -e->q[2];
+        e->q[3] = -e->q[3];
     }
 
     ekf7_cov_update_joseph(e, H, r_val);

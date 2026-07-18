@@ -110,6 +110,9 @@ static inline float clampf(float v, float lo, float hi)
   return fminf(hi, fmaxf(lo, v));
 }
 
+/* NOTE: quat_to_tilt_deg uses ZYX Euler (atan2(gy,gz) for roll).
+ * This is UNDEFINED at pitch = ±90° where gy=gz=0 simultaneously.
+ * Use quat_delta_to_pitch_roll_deg below for servo control. */
 static inline void quat_to_tilt_deg(const float q[4], float *pitch_deg, float *roll_deg)
 {
   float gx = 2.0f * (q[1] * q[3] - q[0] * q[2]);
@@ -119,13 +122,48 @@ static inline void quat_to_tilt_deg(const float q[4], float *pitch_deg, float *r
   gx = clampf(gx, -1.0f, 1.0f);
 
   if (pitch_deg)
-  {
     *pitch_deg = atan2f(-gx, sqrtf(gy * gy + gz * gz)) * (180.0f / 3.14159265f);
-  }
   if (roll_deg)
-  {
     *roll_deg = atan2f(gy, gz) * (180.0f / 3.14159265f);
-  }
+}
+
+/* Gimbal-lock-free pitch/roll extraction using Swing-Twist decomposition.
+ *
+ * Twist axis = body X (roll axis).  The delta quaternion is factored as:
+ *   q_delta = q_twist ⊗ q_swing
+ * where q_twist = [cos(r/2), sin(r/2), 0, 0]  (pure X rotation = roll)
+ *       q_swing = q_twist_conj ⊗ q_delta       (remaining pitch-only rotation)
+ *
+ * This stays well-defined through ±90° pitch because:
+ *   Roll  = 2·atan2(q_twist_x, q_twist_w)  — denominator never zero
+ *   Pitch = asinf(−gx_swing)               — argument always in [−1, 1]
+ *
+ * The swing multiplication is done analytically (q_twist has yz=0)
+ * so no heap allocation or math3d_quat_multiply call is needed. */
+static inline void quat_delta_to_pitch_roll_deg(const float q[4],
+                                                float *pitch_deg,
+                                                float *roll_deg)
+{
+  /* --- Twist: project q onto the X-rotation plane and normalise --- */
+  float tw = q[0], tx = q[1];
+  float tn = sqrtf(tw * tw + tx * tx);
+  float qtw, qtx;
+  if (tn > 1e-6f) { qtw = tw / tn; qtx = tx / tn; }
+  else            { qtw = 1.0f;    qtx = 0.0f;    }
+
+  /* --- Swing: q_swing = q_twist_conj ⊗ q
+   *     q_twist_conj = [qtw, -qtx, 0, 0]
+   *     Analytical product (yz rows of twist are zero): --- */
+  float sw =  qtw * q[0] + qtx * q[1];
+  float sx =  qtw * q[1] - qtx * q[0];
+  float sy =  qtw * q[2] + qtx * q[3];
+  float sz =  qtw * q[3] - qtx * q[2];
+
+  /* Gravity X component of q_swing = sin(pitch) */
+  float gx = clampf(2.0f * (sx * sz - sw * sy), -1.0f, 1.0f);
+
+  if (pitch_deg) *pitch_deg = asinf(-gx) * (180.0f / 3.14159265f);
+  if (roll_deg)  *roll_deg  = 2.0f * atan2f(qtx, qtw) * (180.0f / 3.14159265f);
 }
 
 /* USER CODE END 0 */
@@ -679,37 +717,8 @@ static void imu_task_fn(void *arg)
       float q_delta_seed[4];
       math3d_quat_multiply(q_conj, q_now_seed, q_delta_seed);
 
-      /* Swing-Twist decomposition (twist axis = X / roll).
-       * q_delta = q_ref_conj * q_now  →  left-compose convention
-       * Therefore: q_delta = q_twist * q_swing
-       *            q_swing = q_twist_conj * q_delta  (left-multiply) */
-      float twist_seed_w = q_delta_seed[0];
-      float twist_seed_x = q_delta_seed[1];
-      float twist_seed_norm = sqrtf(twist_seed_w * twist_seed_w + twist_seed_x * twist_seed_x);
-      float q_twist_seed[4];
-      if (twist_seed_norm < 1e-6f)
-      {
-        q_twist_seed[0] = 1.0f;
-        q_twist_seed[1] = 0.0f;
-        q_twist_seed[2] = 0.0f;
-        q_twist_seed[3] = 0.0f;
-      }
-      else
-      {
-        q_twist_seed[0] = twist_seed_w / twist_seed_norm;
-        q_twist_seed[1] = twist_seed_x / twist_seed_norm;
-        q_twist_seed[2] = 0.0f;
-        q_twist_seed[3] = 0.0f;
-      }
-      float q_twist_seed_conj[4] = {q_twist_seed[0], -q_twist_seed[1], 0.0f, 0.0f};
-      float q_swing_seed[4];
-      math3d_quat_multiply(q_twist_seed_conj, q_delta_seed, q_swing_seed); /* q_swing = q_twist_conj * q_delta */
-
-      float w = q_swing_seed[0], x = q_swing_seed[1], y = q_swing_seed[2], z = q_swing_seed[3];
-      float gx = 2.0f * (x * z - w * y);
-      gx = clampf(gx, -1.0f, 1.0f);
-      float _p = asinf(-gx) * (180.0f / 3.14159265f);
-      float _r = 2.0f * atan2f(q_twist_seed[1], q_twist_seed[0]) * (180.0f / 3.14159265f);
+      float _p, _r;
+      quat_delta_to_pitch_roll_deg(q_delta_seed, &_p, &_r);
 #endif
 
       float pitch_us = 1500.0f + ((_p * PITCH_SERVO_DIR) * (2000.0f / 180.0f));
@@ -816,7 +825,8 @@ static void imu_task_fn(void *arg)
         float q_ref_conj[4] = {q_ref[i][0], -q_ref[i][1], -q_ref[i][2], -q_ref[i][3]};
         float q_delta[4];
         math3d_quat_multiply(q_ref_conj, q_now, q_delta);
-        quat_to_tilt_deg(q_delta, &pitch_deg, &roll_deg);
+        /* Fix: use Swing-Twist decomposition — no gimbal lock at pitch ±90° */
+        quat_delta_to_pitch_roll_deg(q_delta, &pitch_deg, &roll_deg);
 #endif
         _valid = 1;
       }
