@@ -93,8 +93,10 @@ static void MX_I2C1_Init(void);
 static void MX_I2C2_Init(void); /* OLED SSD1306 I2C bus */
 static void MX_TIM2_Init(void);
 static void MX_USART2_UART_Init(void);
+#if ROBOT_MODE == ROBOT_MODE_ARM
 static void MX_TIM3_Init(void);
 static void MX_USART1_UART_Init(void);
+#endif
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
@@ -203,6 +205,7 @@ int main(void)
   MX_TIM2_Init();
   MX_USART2_UART_Init();
 
+#if ROBOT_MODE == ROBOT_MODE_ARM
   /* Deselect onboard SPI Flash (PA4=CS) so it releases PA6 (MISO) / PA7 (MOSI).
    * On the Black Pill the flash shares these pins with TIM3_CH1/CH2.         */
   {
@@ -220,6 +223,7 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   gripper_init();
+#endif
   app_cli_print_banner();
   uart_cli_init(&huart2);
   timebase_init();
@@ -436,6 +440,7 @@ static void MX_TIM2_Init(void)
   /* USER CODE END TIM2_Init 2 */
 }
 
+#if ROBOT_MODE == ROBOT_MODE_ARM
 /**
  * @brief TIM3 Initialization Function
  * @param None
@@ -502,6 +507,7 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 2 */
 }
+#endif
 
 /**
  * @brief USART2 Initialization Function
@@ -535,6 +541,7 @@ static void MX_USART2_UART_Init(void)
   /* USER CODE END USART2_Init 2 */
 }
 
+#if ROBOT_MODE == ROBOT_MODE_ARM
 static void MX_USART1_UART_Init(void)
 {
 
@@ -561,6 +568,7 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 2 */
 }
+#endif
 
 /**
  * @brief GPIO Initialization Function
@@ -665,6 +673,7 @@ static void imu_task_fn(void *arg)
    */
   osDelay(pdMS_TO_TICKS(2000));
 
+#if ROBOT_MODE == ROBOT_MODE_ARM
   /* --- Init Servos to Safe Lock Position during calibration --- */
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
@@ -674,6 +683,7 @@ static void imu_task_fn(void *arg)
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 500);  // Roll 1
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 1500); // Pitch 2
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 500);  // Roll 2
+#endif
 
   /* --- Now begin the lengthy IMU initialization and calibration --- */
   imu_app_stream_set(false);
@@ -681,19 +691,24 @@ static void imu_task_fn(void *arg)
   imu_app_ekf_reset();
   imu_app_madgwick_reset();
   imu_app_cal_gyro(4000);
-  imu_app_stream_set(true);
+  // imu_app_stream_set(true); /* Removed so CLI starts quiet by default */
 
+#if ROBOT_MODE == ROBOT_MODE_ARM
   emg_uart_init(&huart1);
+#endif
 
   /* Let EKF converge (~50 samples ≈ 250 ms at 200 Hz) */
   HAL_TIM_Base_Start_IT(&htim2);
+#if ROBOT_MODE == ROBOT_MODE_ARM
   Attitude_t ekf_att[NUM_IMUS];
+#endif
   for (int i = 0; i < 50; i++)
   {
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
     imu_app_step();
   }
 
+#if ROBOT_MODE == ROBOT_MODE_ARM
   /* Capture q_ref = neutral pose (filtered IMUs only) */
   float q_ref[NUM_IMUS][4];
   for (int i = 0; i < NUM_IMUS; i++)
@@ -713,7 +728,9 @@ static void imu_task_fn(void *arg)
       q_ref[i][3] = ekf_att[i].q3;
     }
   }
+#endif
 
+#if ROBOT_MODE == ROBOT_MODE_ARM
   /* ── Servo Smooth Startup ────────────────────────────────────────────── */
   float smoothed_pitch[NUM_IMUS];
   float smoothed_roll[NUM_IMUS];
@@ -771,6 +788,7 @@ static void imu_task_fn(void *arg)
   osDelay(pdMS_TO_TICKS(300));
 
   gripper_home();
+#endif
 
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); /* active-low: OFF */
 
@@ -807,6 +825,7 @@ static void imu_task_fn(void *arg)
           continue;
         }
 #endif
+#if ROBOT_MODE == ROBOT_MODE_ARM
         if (imu_app_get_ekf(i, &ekf_att[i]))
         {
           q_ref[i][0] = ekf_att[i].q0;
@@ -814,12 +833,14 @@ static void imu_task_fn(void *arg)
           q_ref[i][2] = ekf_att[i].q2;
           q_ref[i][3] = ekf_att[i].q3;
         }
+#endif
       }
       rezero_flash_count = (uint32_t)IMU_FS_HZ; /* Flash display for 1 second */
     }
     if (rezero_flash_count > 0U)
       rezero_flash_count--;
 
+#if ROBOT_MODE == ROBOT_MODE_ARM
     float final_pitch_deg[NUM_IMUS] = {0};
     float final_roll_deg[NUM_IMUS] = {0};
 
@@ -900,6 +921,7 @@ static void imu_task_fn(void *arg)
           final_pitch_deg[i] = pitch_deg;
           final_roll_deg[i] = roll_deg;
 
+
           float pitch_servo_us = 1500.0f + ((pitch_deg * PITCH_SERVO_DIR) * (2000.0f / 180.0f));
           uint32_t ccr_pitch = (uint32_t)fmaxf(1055.6f, fminf(1944.4f, pitch_servo_us));
 
@@ -943,9 +965,11 @@ static void imu_task_fn(void *arg)
     uint32_t _t_grip = perf_timer_start();
     gripper_update();
     perf_timer_stop(PERF_SLOT_GRIPPER, _t_grip);
+#endif
 
     {
       SystemState_t disp_state;
+#if ROBOT_MODE == ROBOT_MODE_ARM
       disp_state.pitch_0 = final_pitch_deg[0];
       disp_state.roll_0 = final_roll_deg[0];
       disp_state.servo_pitch_us_0 = (uint32_t)smoothed_pitch[0];
@@ -964,6 +988,25 @@ static void imu_task_fn(void *arg)
         disp_state.servo_pitch_us_1 = 1500U;
         disp_state.servo_roll_us_1 = 1500U;
       }
+#else
+      /* In Leg Mode, pull the tared bone-frame angles */
+      float thigh = 0.0f, shin = 0.0f, knee = 0.0f;
+      imu_app_get_leg_angles(&thigh, &shin, &knee);
+
+      disp_state.pitch_0 = thigh;
+      disp_state.roll_0 = knee; /* using roll_0 field to show knee angle on the screen */
+      disp_state.servo_pitch_us_0 = 1500U;
+      disp_state.servo_roll_us_0 = 1500U;
+      if (NUM_IMUS > 1) {
+        disp_state.pitch_1 = shin;
+        disp_state.roll_1 = 0.0f;
+      } else {
+        disp_state.pitch_1 = 0.0f;
+        disp_state.roll_1 = 0.0f;
+      }
+      disp_state.servo_pitch_us_1 = 1500U;
+      disp_state.servo_roll_us_1 = 1500U;
+#endif
       /* Flash RE-ZEROED on display for 1 second after button press */
       disp_state.status = (rezero_flash_count > 0U) ? SYS_STATUS_REZEROED
                                                     : SYS_STATUS_RUNNING;

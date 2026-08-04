@@ -37,8 +37,8 @@ mpu6050_status_t mpu6050_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6
 
   // 3) Sample rate: with DLPF enabled, internal gyro rate = 1 kHz
   //    Output rate = 1000 / (1 + SMPLRT_DIV)
-  //    For 1000 Hz => SMPLRT_DIV = 0  (hardware maximum with DLPF active)
-  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_SMPLRT_DIV, 0x01u, 50) != I2C_REG_OK)
+  //    For 200 Hz => SMPLRT_DIV = 4
+  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_SMPLRT_DIV, 0x04u, 50) != I2C_REG_OK)
     return MPU6050_ERR_I2C;
 
   // 4) DLPF (CONFIG): 98 Hz gyro bandwidth (DLPF_CFG=2).
@@ -54,8 +54,8 @@ mpu6050_status_t mpu6050_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6
   if (i2c_write_reg(hi2c, addr7, MPU6050_REG_GYRO_CONFIG, 0x10u, 50) != I2C_REG_OK)
     return MPU6050_ERR_I2C;
 
-  // 6) Accel full-scale: ±2g (AFS_SEL=0)
-  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_ACCEL_CONFIG, 0x00u, 50) != I2C_REG_OK)
+  /* 3) Accel config: AFS_SEL=2 (±8g) -> 0x10 */
+  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_ACCEL_CONFIG, 0x10u, 50) != I2C_REG_OK)
     return MPU6050_ERR_I2C;
 
   // 7) Read back config for CLI "mpu cfg"
@@ -63,6 +63,30 @@ mpu6050_status_t mpu6050_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6
   out_cfg->whoami = id;
   return mpu6050_read_cfg(hi2c, addr7, out_cfg);
 }
+
+/* Per-IMU custom initialisation — same sequence as init_200hz but driven by
+ * the caller-supplied mpu6050_hw_cfg_t so each IMU can have its own range. */
+mpu6050_status_t mpu6050_init_custom(I2C_HandleTypeDef *hi2c, uint8_t addr7,
+                                     const mpu6050_hw_cfg_t *hw, mpu6050_cfg_t *out_cfg)
+{
+  if (!hi2c || !hw || !out_cfg) return MPU6050_ERR_PARAM;
+
+  uint8_t id = 0;
+  if (mpu6050_whoami(hi2c, addr7, &id) != MPU6050_OK) return MPU6050_ERR_I2C;
+  if (id != 0x68u && id != 0x70u && id != 0x71u && id != 0x75u) return MPU6050_ERR_ID;
+
+  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_PWR_MGMT_1,  0x01u,       50) != I2C_REG_OK) return MPU6050_ERR_I2C;
+  HAL_Delay(10);
+  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_SMPLRT_DIV,  hw->smplrt_div, 50) != I2C_REG_OK) return MPU6050_ERR_I2C;
+  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_CONFIG,       hw->dlpf_cfg,  50) != I2C_REG_OK) return MPU6050_ERR_I2C;
+  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_GYRO_CONFIG,  hw->gyro_fs,   50) != I2C_REG_OK) return MPU6050_ERR_I2C;
+  if (i2c_write_reg(hi2c, addr7, MPU6050_REG_ACCEL_CONFIG, hw->accel_fs,  50) != I2C_REG_OK) return MPU6050_ERR_I2C;
+
+  out_cfg->addr7 = addr7;
+  out_cfg->whoami = id;
+  return mpu6050_read_cfg(hi2c, addr7, out_cfg);
+}
+
 
 mpu6050_status_t mpu6050_read_cfg(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu6050_cfg_t *cfg)
 {

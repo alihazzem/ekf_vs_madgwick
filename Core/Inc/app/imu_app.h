@@ -23,7 +23,7 @@ extern SemaphoreHandle_t g_i2c_mutex;
 /* ── Non-blocking log queue (IMU task → log task) ──────────────────────────
  * Each entry holds one pre-formatted CSV line (EKF angles only).
  * The IMU task posts here; a low-priority log_task_fn drains it via UART. */
-#define LOG_LINE_MAX 96U
+#define LOG_LINE_MAX 256U
 typedef struct { char line[LOG_LINE_MAX]; } LogLine_t;
 extern osMessageQueueId_t logQueueHandle;
 
@@ -60,6 +60,7 @@ void imu_app_add_missed(uint32_t count);
 // control
 void imu_app_stream_set(bool en);
 bool imu_app_stream_get(void);
+void imu_app_get_leg_angles(float *thigh_pitch, float *shin_pitch, float *knee_angle);
 
 void imu_app_set_print_div(uint32_t n); // print every n samples (0=off)
 uint32_t imu_app_get_print_div(void);
@@ -98,6 +99,9 @@ bool imu_app_cal_accel(uint32_t duration_ms); // blocking calibration
 
 // --- Raw Data ---
 void imu_app_get_accel_g(uint8_t imu_idx, float *ax, float *ay, float *az);
+
+// --- Gait Analysis ---
+void imu_app_gait_tare(void);
 
 #if SENSOR_GY91
 /* Last AK8963 raw sample — valid=1 means fresh data was available. */

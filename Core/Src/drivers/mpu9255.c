@@ -71,8 +71,8 @@ mpu9255_status_t mpu9255_init_200hz(I2C_HandleTypeDef *hi2c, uint8_t addr7, mpu9
     if (i2c_write_reg(hi2c, addr7, MPU9255_REG_GYRO_CONFIG, 0x00u, 50) != I2C_REG_OK)
         return MPU9255_ERR_I2C;
 
-    /* 6) Accel full-scale ±2 g (AFS_SEL = 0) */
-    if (i2c_write_reg(hi2c, addr7, MPU9255_REG_ACCEL_CONFIG, 0x00u, 50) != I2C_REG_OK)
+    /* 6) Accel full-scale: ±8g (AFS_SEL=2) -> 0x10 */
+    if (i2c_write_reg(hi2c, addr7, MPU9255_REG_ACCEL_CONFIG, 0x10u, 50) != I2C_REG_OK)
         return MPU9255_ERR_I2C;
 
     /* 7) Accel DLPF: ACCEL_CONFIG2 = 0x03

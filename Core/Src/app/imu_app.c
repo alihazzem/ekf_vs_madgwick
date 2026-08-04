@@ -21,6 +21,7 @@
 #include <string.h>
 #include <math.h>   /* sqrtf for mag norm */
 #include <stdio.h>  /* snprintf for log queue entries */
+#include <stdlib.h> /* abs() for stillness detection */
 
 static I2C_HandleTypeDef *s_hi2c = NULL;
 
@@ -30,8 +31,7 @@ SemaphoreHandle_t g_i2c_mutex = NULL;
 osMessageQueueId_t logQueueHandle = NULL;
 
 static volatile bool s_stream_en = false;
-
-static uint32_t s_print_div = 0;
+static uint32_t s_print_div = 1; // 200Hz default
 
 static uint32_t s_tick_count = 0;
 static uint32_t s_sample_count = 0;
@@ -97,19 +97,123 @@ static int16_t s_gx_off[NUM_IMUS] = {0};
 static int16_t s_gy_off[NUM_IMUS] = {0};
 static int16_t s_gz_off[NUM_IMUS] = {0};
 
+// --- Per-IMU sensor scale factors (set at init, different per IMU in LEG mode) ---
+static float s_gyro_lsb_per_dps[NUM_IMUS];
+static float s_acc_lsb_per_g[NUM_IMUS];
+
+// --- Gait Analysis Variables ---
+static int s_gait_phase = 0; // 0 = STANCE, 1 = SWING
+static float s_last_hs_s = 0.0f;
+static float s_last_to_s = 0.0f;
+static float s_gyro_sma = 0.0f;
+static float s_current_knee_angle = 0.0f;
+static float s_current_thigh_pitch = 0.0f;
+static float s_current_shin_pitch = 0.0f;
+static float s_swing_max_knee = 0.0f;
+static uint8_t s_mid_swing_armed = 0;
+static float s_stride_time = 0.0f;
+static int s_event_flag = 0;
+
+static float s_tare_thigh_offset = 0.0f;
+static float s_tare_shin_offset = 0.0f;
+static float s_tare_knee_offset = 0.0f;
+
+/* Sensor-to-Bone Alignment Quaternions */
+static float s_q_ref[NUM_IMUS][4] = { {1.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f} };
+
+// Helper to extract Pitch purely from the Gravity Vector (Immune to Yaw!)
+static float imu_app_get_gravity_pitch(const float q[4]) {
+    // Extract the Earth's vertical Z-axis (Gravity) mapped into the Sensor frame
+    float gx = 2.0f * (q[1]*q[3] - q[0]*q[2]);
+    float gz = q[0]*q[0] - q[1]*q[1] - q[2]*q[2] + q[3]*q[3];
+
+    // Pitch is the tilt of the gravity vector in the X-Z plane
+    return atan2f(-gx, gz) * (180.0f / (float)M_PI);
+}
+
+void imu_app_gait_tare(void)
+{
+    // Capture the exact pitch of the gravity vector at this millisecond
+    // to compensate for physical velcro strap misalignments.
+    s_tare_thigh_offset = imu_app_get_gravity_pitch(s_ekf[0].q);
+    s_tare_shin_offset  = imu_app_get_gravity_pitch(s_ekf[1].q);
+    s_tare_knee_offset  = 0.0f;
+
+    /* Capture the Bone Frame alignment quaternions */
+    for (int i = 0; i < NUM_IMUS; i++) {
+        s_q_ref[i][0] = s_ekf[i].q[0];
+        s_q_ref[i][1] = s_ekf[i].q[1];
+        s_q_ref[i][2] = s_ekf[i].q[2];
+        s_q_ref[i][3] = s_ekf[i].q[3];
+    }
+}
+
+void imu_app_get_leg_angles(float *thigh_pitch, float *shin_pitch, float *knee_angle)
+{
+    if (thigh_pitch) *thigh_pitch = s_current_thigh_pitch;
+    if (shin_pitch) *shin_pitch = s_current_shin_pitch;
+    if (knee_angle) *knee_angle = s_current_knee_angle;
+}
+
+
+
 // --- Accel raw offsets (per-IMU, initialised from app_config.h defaults) ---
 static int16_t s_ax_off[NUM_IMUS] = {0};
 static int16_t s_ay_off[NUM_IMUS] = {0};
 static int16_t s_az_off[NUM_IMUS] = {0};
 
-static const float ACC_LSB_PER_G = 16384.0f;
-static const float GYRO_LSB_PER_DPS = 32.8f;   /* ±1000 dps, FS_SEL=2 (was 131.0 for ±250 dps) */
 static const float DEG2RAD = 0.017453292519943295f;
+
+#if ROBOT_MODE == ROBOT_MODE_LEG
+UART_HandleTypeDef huart6_esp;
+
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t header1;           // 0xAA
+    uint8_t header2;           // 0x55
+    int16_t thigh_angle_deg100;
+    int16_t shin_angle_deg100;
+    int16_t knee_angle_deg100;
+    uint8_t checksum;
+} EspTelemetry_t;
+#pragma pack(pop)
+
+static void imu_app_usart6_init(void)
+{
+    __HAL_RCC_USART6_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    // PA11 -> USART6_TX
+    // (RX Disabled to prevent floating pin noise)
+    GPIO_InitStruct.Pin = GPIO_PIN_11;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF8_USART6;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    huart6_esp.Instance = USART6;
+    huart6_esp.Init.BaudRate = 115200;
+    huart6_esp.Init.WordLength = UART_WORDLENGTH_8B;
+    huart6_esp.Init.StopBits = UART_STOPBITS_1;
+    huart6_esp.Init.Parity = UART_PARITY_NONE;
+    huart6_esp.Init.Mode = UART_MODE_TX;
+    huart6_esp.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    huart6_esp.Init.OverSampling = UART_OVERSAMPLING_16;
+    HAL_UART_Init(&huart6_esp);
+}
+#endif
 
 void imu_app_init(I2C_HandleTypeDef *hi2c)
 {
   s_hi2c = hi2c;
   imu_app_stats_reset();
+
+#if ROBOT_MODE == ROBOT_MODE_LEG
+  imu_app_usart6_init();
+#endif
 
   if (g_i2c_mutex == NULL)
   {
@@ -146,7 +250,27 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
     {
       mpu6050_cfg_t mpu_cfg;
       uint8_t addr = (i == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
+
+#if ROBOT_MODE == ROBOT_MODE_LEG
+      /* LEG MODE: configure each IMU independently for its body segment */
+      static const mpu6050_hw_cfg_t s_leg_hw[2] = {
+          /* IMU 0 — Thigh: ±500dps, ±4g, 42Hz DLPF (slow segment, high precision) */
+          { LEG_IMU0_SMPLRT_DIV, LEG_IMU0_DLPF_CFG, LEG_IMU0_GYRO_FS, LEG_IMU0_ACCEL_FS,
+            LEG_IMU0_GYRO_LSB_PER_DPS, LEG_IMU0_ACC_LSB_PER_G },
+          /* IMU 1 — Shin:  ±500dps, ±8g, 98Hz DLPF (faster, survives impacts) */
+          { LEG_IMU1_SMPLRT_DIV, LEG_IMU1_DLPF_CFG, LEG_IMU1_GYRO_FS, LEG_IMU1_ACCEL_FS,
+            LEG_IMU1_GYRO_LSB_PER_DPS, LEG_IMU1_ACC_LSB_PER_G },
+      };
+      s_gyro_lsb_per_dps[i] = s_leg_hw[i].gyro_lsb_per_dps;
+      s_acc_lsb_per_g[i]    = s_leg_hw[i].acc_lsb_per_g;
+      mpu6050_status_t st = mpu6050_init_custom(hi2c, addr, &s_leg_hw[i], &mpu_cfg);
+#else
+      /* ARM MODE: both IMUs use the original shared config — unchanged */
+      s_gyro_lsb_per_dps[i] = 32.8f;   /* ±1000 dps */
+      s_acc_lsb_per_g[i]    = 4096.0f; /* ±8 g       */
       mpu6050_status_t st = mpu6050_init_200hz(hi2c, addr, &mpu_cfg);
+#endif
+
       if (st != MPU6050_OK)
       {
         uart_cli_sendf("Failed to init MPU6050 at 0x%02X (err=%d)\r\n", addr, (int)st);
@@ -195,10 +319,39 @@ void imu_app_add_missed(uint32_t count)
 
 void imu_app_step(void)
 {
+    // Smart Auto-Tare: Wait for the EKF to fully converge, then count down 5 seconds.
+    // This guarantees you always have exactly 5 seconds to get into position AFTER the EKF stabilizes.
+    static bool  s_auto_tare_done    = false;
+    static float s_last_thigh_sample = -9999.0f;
+    static float s_last_shin_sample  = -9999.0f;
+    static uint32_t s_stable_start_ms = 0;
+    
+    if (!s_auto_tare_done && s_ekf_valid[0] && s_ekf_valid[1]) {
+        float cur_thigh = imu_app_get_gravity_pitch(s_ekf[0].q);
+        float cur_shin  = imu_app_get_gravity_pitch(s_ekf[1].q);
+        
+        float thigh_delta = cur_thigh - s_last_thigh_sample;
+        float shin_delta  = cur_shin  - s_last_shin_sample;
+        if (thigh_delta < 0.0f) thigh_delta = -thigh_delta;
+        if (shin_delta  < 0.0f) shin_delta  = -shin_delta;
+        
+        s_last_thigh_sample = cur_thigh;
+        s_last_shin_sample  = cur_shin;
+        
+        // EKF is considered converged when angles are stable (changing < 0.5 deg/tick)
+        bool is_stable = (thigh_delta < 0.5f) && (shin_delta < 0.5f) && (s_last_thigh_sample != -9999.0f);
+        
+        uint32_t now_ms = HAL_GetTick();
+        if (!is_stable) {
+            s_stable_start_ms = now_ms; // Reset timer every time the EKF is still bouncing
+        } else if ((now_ms - s_stable_start_ms) > 5000) { // 5 seconds of stable = ready to tare
+            imu_app_gait_tare();
+            s_auto_tare_done = true;
+        }
+    }
+
   s_tick_count++;
 
-  if (!s_stream_en)
-    return;
   if (!s_hi2c)
     return;
 
@@ -296,19 +449,19 @@ void imu_app_step(void)
       if (!imu_ok[i])
         continue;
 
-      // Sensor-frame accel (g) — bias-corrected then scaled
-      float ax_s = (float)(s_last[i].ax - s_ax_off[i]) / ACC_LSB_PER_G;
-      float ay_s = (float)(s_last[i].ay - s_ay_off[i]) / ACC_LSB_PER_G;
-      float az_s = (float)(s_last[i].az - s_az_off[i]) / ACC_LSB_PER_G;
+      // Sensor-frame accel (g) — bias-corrected then scaled with per-IMU range
+      float ax_s = (float)(s_last[i].ax - s_ax_off[i]) / s_acc_lsb_per_g[i];
+      float ay_s = (float)(s_last[i].ay - s_ay_off[i]) / s_acc_lsb_per_g[i];
+      float az_s = (float)(s_last[i].az - s_az_off[i]) / s_acc_lsb_per_g[i];
 
-      // Sensor-frame gyro (rad/s)
+      // Sensor-frame gyro (rad/s) — scaled with per-IMU range
       int16_t gx_corr = s_last[i].gx - s_gx_off[i];
       int16_t gy_corr = s_last[i].gy - s_gy_off[i];
       int16_t gz_corr = s_last[i].gz - s_gz_off[i];
 
-      float wx_s = ((float)gx_corr / GYRO_LSB_PER_DPS) * DEG2RAD;
-      float wy_s = ((float)gy_corr / GYRO_LSB_PER_DPS) * DEG2RAD;
-      float wz_s = ((float)gz_corr / GYRO_LSB_PER_DPS) * DEG2RAD;
+      float wx_s = ((float)gx_corr / s_gyro_lsb_per_dps[i]) * DEG2RAD;
+      float wy_s = ((float)gy_corr / s_gyro_lsb_per_dps[i]) * DEG2RAD;
+      float wz_s = ((float)gz_corr / s_gyro_lsb_per_dps[i]) * DEG2RAD;
 
       // ---- REMAP sensor -> body (defined in app_config.h) ----
       float ax_g = REMAP_AX_G(ax_s, ay_s, az_s);
@@ -492,33 +645,132 @@ void imu_app_step(void)
 #endif
     } // End of IMU loop
 
-    // ---- optional streaming: EKF angles only (non-blocking queue post) ----
-    // CSV format: t_us, imu_idx, ekf_roll_mdeg, ekf_pitch_mdeg, ekf_yaw_mdeg
-    // Posted to logQueueHandle; log_task_fn drains via UART at low priority.
+    // ---- Gait Analysis & Unified Streaming ----
     if (s_print_div != 0 && (s_sample_count % s_print_div) == 0)
     {
       uint32_t t_now = timebase_cycles_to_us(timebase_cycles());
-      for (int i = 0; i < NUM_IMUS; i++)
-      {
-        int32_t ekf_r = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].roll_deg  * 1000.0f) : 0;
-        int32_t ekf_p = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].pitch_deg * 1000.0f) : 0;
-        int32_t ekf_y = s_ekf_valid[i] ? (int32_t)(s_ekf_att[i].yaw_deg   * 1000.0f) : 0;
+      float t_sec = (float)t_now / 1000000.0f;
 
-        if (logQueueHandle != NULL)
-        {
-          LogLine_t entry;
-          snprintf(entry.line, sizeof(entry.line),
-                   "%lu,%d,%d,%d,%d,%d,%d,%d,%ld,%ld,%ld\r\n",
-                   (unsigned long)t_now, i,
-                   /* raw sensor */
-                   (int)s_last[i].ax, (int)s_last[i].ay, (int)s_last[i].az,
-                   (int)s_last[i].gx, (int)s_last[i].gy, (int)s_last[i].gz,
-                   /* EKF Euler angles */
-                   (long)ekf_r, (long)ekf_p, (long)ekf_y);
-          /* Non-blocking: drop silently if the log task is falling behind */
-          osMessageQueuePut(logQueueHandle, &entry, 0U, 0U);
-        }
+      // Extract mapped Euler angles
+      if (NUM_IMUS >= 2 && s_ekf_valid[0] && s_ekf_valid[1]) {
+          // 1. Calculate Signed Pitch Angles purely from Gravity Vector
+          // Because gravity always points down, this is 100% immune to 180-degree Yaw spins!
+          float raw_thigh_pitch = imu_app_get_gravity_pitch(s_ekf[0].q);
+          float raw_shin_pitch  = imu_app_get_gravity_pitch(s_ekf[1].q);
+          
+          float t_pitch = -(raw_thigh_pitch - s_tare_thigh_offset);
+          float s_pitch = -(raw_shin_pitch - s_tare_shin_offset);
+          
+          // Apply an Exponential Moving Average (Low-Pass Filter) to eliminate physical jitter
+          static float s_smooth_thigh = 0.0f;
+          static float s_smooth_shin = 0.0f;
+          static bool s_filter_init = false;
+          
+          if (!s_filter_init) {
+              s_smooth_thigh = t_pitch;
+              s_smooth_shin  = s_pitch;
+              s_filter_init  = true;
+          } else {
+              float alpha = 0.08f; // Lowered for maximum smoothness (was 0.15)
+              s_smooth_thigh = (s_smooth_thigh * (1.0f - alpha)) + (t_pitch * alpha);
+              s_smooth_shin  = (s_smooth_shin * (1.0f - alpha))  + (s_pitch * alpha);
+          }
+          
+          // Quantize to nearest 0.1 degrees, then apply deadband:
+          // Only push the new value to output if it has moved >= 0.1 deg.
+          // This locks the output solid when holding still, eliminating micro-flicker.
+          float q_thigh = roundf(s_smooth_thigh * 10.0f) / 10.0f;
+          float q_shin  = roundf(s_smooth_shin  * 10.0f) / 10.0f;
+          if (fabsf(q_thigh - s_current_thigh_pitch) >= 0.1f)
+              s_current_thigh_pitch = q_thigh;
+          if (fabsf(q_shin - s_current_shin_pitch) >= 0.1f)
+              s_current_shin_pitch = q_shin;
+          
+          // 2. Knee Angle is exactly Thigh - Shin
+          s_current_knee_angle = s_current_thigh_pitch - s_current_shin_pitch;
+          
+          if (s_current_knee_angle < 0.0f) s_current_knee_angle = 0.0f;
+
+          // Run State Machine
+          float gyroY = (float)s_last[1].gy; // Shin Gyro Y
+          s_gyro_sma = s_gyro_sma * 0.8f + gyroY * 0.2f;
+          s_event_flag = 0;
+
+          if (s_gait_phase == 0) { // STANCE
+              if ((t_sec - s_last_hs_s) > 0.300f) {
+                  if (s_current_knee_angle > 15.0f && s_gyro_sma > 1000.0f) {
+                      s_gait_phase = 1; // SWING
+                      s_last_to_s = t_sec;
+                      s_event_flag = 2; // TO event
+                      s_swing_max_knee = s_current_knee_angle;
+                  }
+              }
+          } else { // SWING
+              if (s_current_knee_angle > s_swing_max_knee) s_swing_max_knee = s_current_knee_angle;
+
+              if (!s_mid_swing_armed && (t_sec - s_last_to_s) > 0.300f && s_current_knee_angle < (s_swing_max_knee * 0.8f)) {
+                  s_mid_swing_armed = 1;
+                  s_event_flag = 3; // MidSwing Armed
+              }
+
+              if (s_mid_swing_armed && s_current_knee_angle < 25.0f && s_gyro_sma < 0.0f) {
+                  s_gait_phase = 0; // STANCE
+                  s_mid_swing_armed = 0;
+                  s_event_flag = 1; // HS event
+                  s_stride_time = t_sec - s_last_hs_s;
+                  s_last_hs_s = t_sec;
+              }
+          }
       }
+
+      if (s_stream_en && logQueueHandle != NULL)
+      {
+          LogLine_t entry;
+#if NUM_IMUS >= 2
+          snprintf(entry.line, sizeof(entry.line),
+                   "%lu,%d,%d,%d,%d,%d,%d,%ld,%ld,%ld,%ld,%d,%d,%d,%d,%d,%d,%ld,%ld,%ld,%ld,%d,%d,%d,%d,%d,%d\r\n",
+                   (unsigned long)t_now,
+                   (int)s_last[0].ax, (int)s_last[0].ay, (int)s_last[0].az,
+                   (int)s_last[0].gx, (int)s_last[0].gy, (int)s_last[0].gz,
+                   (long)(s_ekf[0].q[0]*10000), (long)(s_ekf[0].q[1]*10000), (long)(s_ekf[0].q[2]*10000), (long)(s_ekf[0].q[3]*10000),
+                   (int)s_last[1].ax, (int)s_last[1].ay, (int)s_last[1].az,
+                   (int)s_last[1].gx, (int)s_last[1].gy, (int)s_last[1].gz,
+                   (long)(s_ekf[1].q[0]*10000), (long)(s_ekf[1].q[1]*10000), (long)(s_ekf[1].q[2]*10000), (long)(s_ekf[1].q[3]*10000),
+                   (int)(s_current_thigh_pitch * 100.0f), (int)(s_current_shin_pitch * 100.0f), (int)(s_current_knee_angle * 100.0f),
+                   s_gait_phase, s_event_flag, (int)(s_stride_time * 1000.0f));
+          osMessageQueuePut(logQueueHandle, &entry, 0U, 0U);
+#else
+          for (int i = 0; i < NUM_IMUS; i++) {
+              snprintf(entry.line, sizeof(entry.line),
+                       "%lu,%d,%d,%d,%d,%d,%d,%d,%ld,%ld,%ld,%ld,%lu\r\n",
+                       (unsigned long)t_now, i,
+                       (int)s_last[i].ax, (int)s_last[i].ay, (int)s_last[i].az,
+                       (int)s_last[i].gx, (int)s_last[i].gy, (int)s_last[i].gz,
+                       (long)(s_ekf[i].q[0]*10000), (long)(s_ekf[i].q[1]*10000), (long)(s_ekf[i].q[2]*10000), (long)(s_ekf[i].q[3]*10000),
+                       (unsigned long)timebase_cycles_to_us(s_svc_last_us));
+              osMessageQueuePut(logQueueHandle, &entry, 0U, 0U);
+          }
+#endif
+      }
+      
+#if ROBOT_MODE == ROBOT_MODE_LEG
+      EspTelemetry_t pkt;
+      pkt.header1 = 0xAA;
+      pkt.header2 = 0x55;
+      pkt.thigh_angle_deg100 = (int16_t)(s_current_thigh_pitch * 100.0f);
+      pkt.shin_angle_deg100 = (int16_t)(s_current_shin_pitch * 100.0f);
+      pkt.knee_angle_deg100 = (int16_t)(s_current_knee_angle * 100.0f);
+      
+      uint8_t chk = pkt.header1 + pkt.header2;
+      chk += (uint8_t)(pkt.thigh_angle_deg100 & 0xFF) + (uint8_t)(pkt.thigh_angle_deg100 >> 8);
+      chk += (uint8_t)(pkt.shin_angle_deg100 & 0xFF) + (uint8_t)(pkt.shin_angle_deg100 >> 8);
+      chk += (uint8_t)(pkt.knee_angle_deg100 & 0xFF) + (uint8_t)(pkt.knee_angle_deg100 >> 8);
+      pkt.checksum = chk;
+      
+      // UART Transmit to ESP32
+      HAL_UART_Transmit(&huart6_esp, (uint8_t*)&pkt, sizeof(pkt), 5);
+#endif
+
     }
   }
   else
@@ -873,7 +1125,10 @@ bool imu_app_cal_accel(uint32_t duration_ms)
     }
     s_ax_off[i] = (int16_t)(sum_x[i] / (int64_t)count[i]);
     s_ay_off[i] = (int16_t)(sum_y[i] / (int64_t)count[i]);
-    s_az_off[i] = (int16_t)((sum_z[i] / (int64_t)count[i]) - 16384);
+    
+    /* Subtract +1g from the Z axis reading to find the actual zero-g bias.
+     * We use the per-IMU scale factor since IMUs might be running at different ranges. */
+    s_az_off[i] = (int16_t)((sum_z[i] / (int64_t)count[i]) - (int64_t)s_acc_lsb_per_g[i]);
   }
 
   return all_ok;

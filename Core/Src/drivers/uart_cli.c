@@ -25,10 +25,13 @@ static uint32_t s_line_len = 0;
 // implemented in app/cli_app.c
 extern void app_cli_handle_line(const char *line);
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 // ───────────── TX ─────────────
 void uart_cli_send(const char *s) {
   if (!s_huart || !s) return;
-  // Blocking TX – replace with DMA if streaming rate increases
+  // Blocking TX is safer. We fix throughput by bumping baud rate to 2Mbps.
   HAL_UART_Transmit(s_huart, (uint8_t*)s, (uint16_t)strlen(s), 50);
 }
 

@@ -166,6 +166,7 @@ void app_cli_handle_line(const char *line)
     uart_cli_send("  MAD RESET\r\n");
     uart_cli_send("  EKF RESET\r\n");
     uart_cli_send("  PERF ON|OFF|RESET\r\n");
+    uart_cli_send("  GAIT TARE\r\n");
     return;
   }
 
@@ -437,6 +438,19 @@ void app_cli_handle_line(const char *line)
       return;
     }
     uart_cli_send("usage: PERF ON|OFF|RESET\r\n");
+    return;
+  }
+
+  /* ─────────── GAIT commands ─────────── */
+  if (strcmp(argv[0], "GAIT") == 0)
+  {
+    if (argc >= 2 && strcmp(argv[1], "TARE") == 0)
+    {
+      imu_app_gait_tare();
+      uart_cli_send("ok\r\n");
+      return;
+    }
+    uart_cli_send("usage: GAIT TARE\r\n");
     return;
   }
 

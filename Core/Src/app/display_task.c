@@ -1,4 +1,5 @@
 #include "app/display_task.h"
+#include "app/app_config.h"
 #include "drivers/ssd1306.h"
 
 #include "stm32f4xx_hal.h"
@@ -63,6 +64,7 @@ void display_task_fn(void *arg)
             ssd1306_puts(COL_LEFT, PAGE_STATUS, "   IMU GIMBAL   ");
         }
 
+#if ROBOT_MODE == ROBOT_MODE_ARM
         /* Row 1: Column headers */
         ssd1306_puts(COL_LEFT,  1, "IMU0");
         ssd1306_puts(COL_RIGHT, 1, "IMU1");
@@ -138,6 +140,40 @@ void display_task_fn(void *arg)
             snprintf(line, sizeof(line), "1RS:%c%dd", sign, deg);
         }
         ssd1306_puts(COL_RIGHT, PAGE_SERVO_R, line);
+#else
+        /* LEG MODE OLED RENDERING */
+        ssd1306_puts(COL_LEFT, 1, "LEG JOINT ANGLES");
+
+        /* Row 2: Thigh (stored in pitch_0) */
+        {
+            float v = state.pitch_0;
+            char sign = (v < 0.0f) ? '-' : '+';
+            int whole = (int)(v < 0.0f ? -v : v);
+            int frac  = (int)(((v < 0.0f ? -v : v) - (float)whole) * 10.0f);
+            snprintf(line, sizeof(line), "Thigh: %c%3d.%d deg", sign, whole, frac);
+        }
+        ssd1306_puts(COL_LEFT, PAGE_PITCH, line);
+
+        /* Row 3: Shin (stored in pitch_1) */
+        {
+            float v = state.pitch_1;
+            char sign = (v < 0.0f) ? '-' : '+';
+            int whole = (int)(v < 0.0f ? -v : v);
+            int frac  = (int)(((v < 0.0f ? -v : v) - (float)whole) * 10.0f);
+            snprintf(line, sizeof(line), "Shin : %c%3d.%d deg", sign, whole, frac);
+        }
+        ssd1306_puts(COL_LEFT, PAGE_ROLL, line);
+
+        /* Row 4: Knee (stored in roll_0) */
+        {
+            float v = state.roll_0;
+            char sign = (v < 0.0f) ? '-' : '+';
+            int whole = (int)(v < 0.0f ? -v : v);
+            int frac  = (int)(((v < 0.0f ? -v : v) - (float)whole) * 10.0f);
+            snprintf(line, sizeof(line), "Knee : %c%3d.%d deg", sign, whole, frac);
+        }
+        ssd1306_puts(COL_LEFT, PAGE_SERVO_P, line);
+#endif
 
         /* Push framebuffer to OLED */
         ssd1306_flush(&hi2c2);
