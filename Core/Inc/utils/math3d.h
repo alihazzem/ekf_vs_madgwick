@@ -16,6 +16,11 @@ void math3d_quat_multiply(const float qa[4], const float qb[4], float q_out[4]);
 
 void math3d_quat_conjugate(const float q[4], float q_out[4]);
 
+void math3d_quat_delta_to_pitch_roll_deg(const float q[4], float *pitch_deg, float *roll_deg);
+
+float math3d_gravity_pitch(const float q[4]);
+
+
 #ifdef __cplusplus
 }
 #endif

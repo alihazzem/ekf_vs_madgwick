@@ -53,14 +53,13 @@ typedef struct
 } imu_stats_t;
 
 // Core app hooks
-void imu_app_init(I2C_HandleTypeDef *hi2c);
+void imu_app_init(I2C_HandleTypeDef *hi2c_1, I2C_HandleTypeDef *hi2c_3);
 void imu_app_step(void);          // call from RTOS task
 void imu_app_add_missed(uint32_t count);
 
 // control
 void imu_app_stream_set(bool en);
 bool imu_app_stream_get(void);
-void imu_app_get_leg_angles(float *thigh_pitch, float *shin_pitch, float *knee_angle);
 
 void imu_app_set_print_div(uint32_t n); // print every n samples (0=off)
 uint32_t imu_app_get_print_div(void);
@@ -90,7 +89,9 @@ uint32_t imu_app_ekf_last_us(uint8_t imu_idx);
 // --- Gyro calibration (raw LSB offsets) ---
 void imu_app_cal_clear(void);
 bool imu_app_cal_get(uint8_t imu_idx, int16_t *gx_off, int16_t *gy_off, int16_t *gz_off);
-bool imu_app_cal_gyro(uint32_t duration_ms); // blocking calibration
+bool imu_app_cal_gyro(uint32_t duration_ms);
+bool imu_app_load_calibration(void);
+bool imu_app_save_calibration(void); // blocking calibration
 
 // --- Accel calibration (raw LSB offsets, per-IMU) ---
 void imu_app_get_accel_bias(uint8_t imu_idx, int16_t *ax, int16_t *ay, int16_t *az);
@@ -99,9 +100,9 @@ bool imu_app_cal_accel(uint32_t duration_ms); // blocking calibration
 
 // --- Raw Data ---
 void imu_app_get_accel_g(uint8_t imu_idx, float *ax, float *ay, float *az);
+void imu_app_get_gyro_raw(uint8_t imu_idx, int16_t *gx, int16_t *gy, int16_t *gz);
 
-// --- Gait Analysis ---
-void imu_app_gait_tare(void);
+/* Gait analysis API has moved to gait_app.h */
 
 #if SENSOR_GY91
 /* Last AK8963 raw sample — valid=1 means fresh data was available. */

@@ -217,4 +217,13 @@ void DMA2_Stream2_IRQHandler(void)
   HAL_DMA_IRQHandler(&hdma_usart1_rx);
 }
 
+/**
+  * @brief This function handles DMA2 stream6 global interrupt.
+  */
+extern DMA_HandleTypeDef hdma_usart6_tx;
+void DMA2_Stream6_IRQHandler(void)
+{
+  HAL_DMA_IRQHandler(&hdma_usart6_tx);
+}
+
 /* USER CODE END 1 */

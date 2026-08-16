@@ -87,3 +87,29 @@ void math3d_quat_conjugate(const float q[4], float q_out[4])
   q_out[2] = -q[2];
   q_out[3] = -q[3];
 }
+
+void math3d_quat_delta_to_pitch_roll_deg(const float q[4], float *pitch_deg, float *roll_deg)
+{
+  float tw = q[0], tx = q[1];
+  float tn = sqrtf(tw * tw + tx * tx);
+  float qtw, qtx;
+  if (tn > 1e-6f) { qtw = tw / tn; qtx = tx / tn; }
+  else            { qtw = 1.0f;    qtx = 0.0f;    }
+
+  float sw =  qtw * q[0] + qtx * q[1];
+  float sx =  qtw * q[1] - qtx * q[0];
+  float sy =  qtw * q[2] + qtx * q[3];
+  float sz =  qtw * q[3] - qtx * q[2];
+
+  float gx = clampf(2.0f * (sx * sz - sw * sy), -1.0f, 1.0f);
+
+  if (pitch_deg) *pitch_deg = asinf(-gx) * (180.0f / 3.14159265f);
+  if (roll_deg)  *roll_deg  = 2.0f * atan2f(qtx, qtw) * (180.0f / 3.14159265f);
+}
+
+float math3d_gravity_pitch(const float q[4])
+{
+  float gx = 2.0f * (q[1]*q[3] - q[0]*q[2]);
+  float gz = q[0]*q[0] - q[1]*q[1] - q[2]*q[2] + q[3]*q[3];
+  return atan2f(-gx, gz) * (180.0f / 3.14159265f);
+}

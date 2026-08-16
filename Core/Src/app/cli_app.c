@@ -1,4 +1,7 @@
 #include "app/cli_app.h"
+#include "app/gait_app.h"
+#include "app/imu_task.h"
+#include "app/app_config.h"
 #include "drivers/uart_cli.h"
 #include "stm32f4xx_hal.h"
 
@@ -446,7 +449,7 @@ void app_cli_handle_line(const char *line)
   {
     if (argc >= 2 && strcmp(argv[1], "TARE") == 0)
     {
-      imu_app_gait_tare();
+      g_rezero_requested = 1;
       uart_cli_send("ok\r\n");
       return;
     }

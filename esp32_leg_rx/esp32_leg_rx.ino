@@ -36,9 +36,13 @@ static BLEUUID charUUID("beb5483e-36e1-4688-b7f5-ea07361b26a8");
 typedef struct {
     uint8_t header1;           // 0xAA
     uint8_t header2;           // 0x55
-    int16_t thigh_angle_deg100;
-    int16_t shin_angle_deg100;
-    int16_t knee_angle_deg100;
+    int16_t thigh_L_deg100;
+    int16_t shin_L_deg100;
+    int16_t knee_L_deg100;
+    int16_t thigh_R_deg100;
+    int16_t shin_R_deg100;
+    int16_t knee_R_deg100;
+    uint8_t status;
     uint8_t checksum;
 } EspTelemetry_t;
 #pragma pack(pop)
@@ -64,18 +68,36 @@ static void notifyCallback(
         if (pkt->header1 == 0xAA && pkt->header2 == 0x55) {
             
             // Reconstruct the floating point angles
-            float trueThigh = pkt->thigh_angle_deg100 / 100.0f;
-            float trueShin  = pkt->shin_angle_deg100 / 100.0f;
-            float trueKnee  = pkt->knee_angle_deg100 / 100.0f;
+            float trueThigh_L = pkt->thigh_L_deg100 / 100.0f;
+            float trueShin_L  = pkt->shin_L_deg100 / 100.0f;
+            float trueKnee_L  = pkt->knee_L_deg100 / 100.0f;
 
-            // Print the live data to the Serial Monitor!
-                motor5->moveTo(0.7434*(trueThigh)*800);
-                motor1->moveTo(0.8608*trueKnee*800);
-                motor3->moveTo(0.6519*(trueKnee-trueThigh)*800);
-                //motor8->moveTo(0.7434*(trueShin+trueKnee)*800);
-                //motor2->moveTo(0.8608*trueKnee*800);
-                //motor6->moveTo(-0.6519*(trueShin)*800);
-                Serial.println(motor1->getCurrentPosition());
+            float trueThigh_R = pkt->thigh_R_deg100 / 100.0f;
+            float trueShin_R  = pkt->shin_R_deg100 / 100.0f;
+            float trueKnee_R  = pkt->knee_R_deg100 / 100.0f;
+
+            if (pkt->status == 0) {
+                // Left Leg Motors (5, 1, 3)
+                motor5->moveTo(0.7434*(trueThigh_L)*800);
+                motor1->moveTo(0.8608*trueKnee_L*800);
+                motor3->moveTo(0.6519*(trueKnee_L - trueThigh_L)*800);
+                
+                // Right Leg Motors (8, 2, 6)
+                // Applying the math formulas you had commented out for the right leg
+                motor8->moveTo(0.7434*(trueShin_R + trueKnee_R)*800);
+                motor2->moveTo(0.8608*trueKnee_R*800);
+                motor6->moveTo(-0.6519*(trueShin_R)*800);
+            } else {
+                // Failsafe: Fault detected on Transmitter side (e.g. UART disconnected)
+                // Optionally stop motors here
+                motor5->stopMove();
+                motor1->stopMove();
+                motor3->stopMove();
+                motor8->stopMove();
+                motor2->stopMove();
+                motor6->stopMove();
+            }
+            Serial.println(motor1->getCurrentPosition());
         }
     }
 

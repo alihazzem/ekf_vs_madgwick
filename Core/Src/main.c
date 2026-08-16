@@ -26,6 +26,8 @@
 #include "app/app_config.h"
 #include "app/cli_app.h"
 #include "app/imu_app.h"
+#include "app/imu_task.h"
+#include "app/gait_app.h"
 #include "drivers/uart_cli.h"
 #include "task.h"
 #include "utils/timebase.h"
@@ -33,10 +35,12 @@
 #include <stdio.h>
 #include <string.h>
 
-// #include "motor_test.h"
 #include "app/display_task.h" /* SystemState_t, displayQueueHandle */
+#if ROBOT_MODE == ROBOT_MODE_ARM || ROBOT_MODE == ROBOT_MODE_FULL
 #include "drivers/emg_uart.h"
 #include "drivers/gripper.h"
+#endif
+
 #include "utils/math3d.h"
 #include "app/perf_timer.h" /* DWT execution-time profiler */
 
@@ -49,8 +53,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BYPASS_IMU_FILTER 0
-#define PITCH_SERVO_DIR -1.0f
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -80,10 +82,6 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t imuTaskHandle;
 // osMessageQueueId_t motorCmdQueueHandle;
 
-/* Re-zero button: set to 1 by cli_task_fn (button ISR poll), cleared by
- * imu_task_fn. volatile ensures both tasks see updates without a mutex
- * (single-byte atomic write). */
-volatile uint8_t g_rezero_requested = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -100,74 +98,12 @@ static void MX_USART1_UART_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-static void imu_task_fn(void *arg);
 static void cli_task_fn(void *arg);
 static void log_task_fn(void *arg);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-static inline float clampf(float v, float lo, float hi)
-{
-  return fminf(hi, fmaxf(lo, v));
-}
-
-/* NOTE: quat_to_tilt_deg uses ZYX Euler (atan2(gy,gz) for roll).
- * This is UNDEFINED at pitch = ±90° where gy=gz=0 simultaneously.
- * Use quat_delta_to_pitch_roll_deg below for servo control. */
-static inline void quat_to_tilt_deg(const float q[4], float *pitch_deg, float *roll_deg)
-{
-  float gx = 2.0f * (q[1] * q[3] - q[0] * q[2]);
-  float gy = 2.0f * (q[0] * q[1] + q[2] * q[3]);
-  float gz = q[0] * q[0] - q[1] * q[1] - q[2] * q[2] + q[3] * q[3];
-
-  gx = clampf(gx, -1.0f, 1.0f);
-
-  if (pitch_deg)
-    *pitch_deg = atan2f(-gx, sqrtf(gy * gy + gz * gz)) * (180.0f / 3.14159265f);
-  if (roll_deg)
-    *roll_deg = atan2f(gy, gz) * (180.0f / 3.14159265f);
-}
-
-/* Gimbal-lock-free pitch/roll extraction using Swing-Twist decomposition.
- *
- * Twist axis = body X (roll axis).  The delta quaternion is factored as:
- *   q_delta = q_twist ⊗ q_swing
- * where q_twist = [cos(r/2), sin(r/2), 0, 0]  (pure X rotation = roll)
- *       q_swing = q_twist_conj ⊗ q_delta       (remaining pitch-only rotation)
- *
- * This stays well-defined through ±90° pitch because:
- *   Roll  = 2·atan2(q_twist_x, q_twist_w)  — denominator never zero
- *   Pitch = asinf(−gx_swing)               — argument always in [−1, 1]
- *
- * The swing multiplication is done analytically (q_twist has yz=0)
- * so no heap allocation or math3d_quat_multiply call is needed. */
-static inline void quat_delta_to_pitch_roll_deg(const float q[4],
-                                                float *pitch_deg,
-                                                float *roll_deg)
-{
-  /* --- Twist: project q onto the X-rotation plane and normalise --- */
-  float tw = q[0], tx = q[1];
-  float tn = sqrtf(tw * tw + tx * tx);
-  float qtw, qtx;
-  if (tn > 1e-6f) { qtw = tw / tn; qtx = tx / tn; }
-  else            { qtw = 1.0f;    qtx = 0.0f;    }
-
-  /* --- Swing: q_swing = q_twist_conj ⊗ q
-   *     q_twist_conj = [qtw, -qtx, 0, 0]
-   *     Analytical product (yz rows of twist are zero): --- */
-  float sw =  qtw * q[0] + qtx * q[1];
-  float sx =  qtw * q[1] - qtx * q[0];
-  float sy =  qtw * q[2] + qtx * q[3];
-  float sz =  qtw * q[3] - qtx * q[2];
-
-  /* Gravity X component of q_swing = sin(pitch) */
-  float gx = clampf(2.0f * (sx * sz - sw * sy), -1.0f, 1.0f);
-
-  if (pitch_deg) *pitch_deg = asinf(-gx) * (180.0f / 3.14159265f);
-  if (roll_deg)  *roll_deg  = 2.0f * atan2f(qtx, qtw) * (180.0f / 3.14159265f);
-}
 
 /* USER CODE END 0 */
 
@@ -245,7 +181,6 @@ int main(void)
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  // motorCmdQueueHandle = osMessageQueueNew(10, sizeof(MotorCmd_t), NULL);
 
   /* Display queue: depth=1 so the IMU task always drops stale frames.
    * osMessageQueuePut with timeout=0 returns immediately if full —
@@ -289,11 +224,6 @@ int main(void)
                                .priority = osPriorityBelowNormal,
                                .stack_size = 256 * 4});
 
-  // osThreadNew(motor_test_task_fn, NULL, &(osThreadAttr_t){
-  //     .name       = "MotorTest",
-  //     .priority   = osPriorityNormal,
-  //     .stack_size = 256 * 4
-  // });
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -601,10 +531,12 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
   if (huart->Instance == USART1)
   {
+#if ROBOT_MODE == ROBOT_MODE_ARM || ROBOT_MODE == ROBOT_MODE_FULL
     /* ── Thesis measurement 1: EMG UART parse time ── */
     uint32_t _t_emg = perf_timer_start();
     emg_uart_on_rx_event(huart, Size);
     perf_timer_stop(PERF_SLOT_EMG_PARSE, _t_emg);
+#endif
   }
 }
 
@@ -612,7 +544,9 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART1)
   {
+#if ROBOT_MODE == ROBOT_MODE_ARM || ROBOT_MODE == ROBOT_MODE_FULL
     emg_uart_recover();
+#endif
   }
 }
 
@@ -647,443 +581,7 @@ static void log_task_fn(void *arg)
 
 /* USER CODE END 4 */
 
-#if STACK_TUNING_MODE
-static volatile UBaseType_t s_imu_hwm = 0;
-#endif
 
-static void imu_task_fn(void *arg)
-{
-  (void)arg;
-  uint32_t tick_count = 0;
-  (void)tick_count;
-
-  /* --- Startup: LED on PC13 signals calibration --- */
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  GPIO_InitTypeDef led = {0};
-  led.Pin = GPIO_PIN_13;
-  led.Mode = GPIO_MODE_OUTPUT_PP;
-  led.Pull = GPIO_NOPULL;
-  led.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOC, &led);
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET); /* active-low: ON */
-
-  /* --- Safety Delay ---
-   * Wait 2 seconds before sending power to the servos,
-   * giving you time to move your hands clear after plugging in the battery.
-   */
-  osDelay(pdMS_TO_TICKS(2000));
-
-#if ROBOT_MODE == ROBOT_MODE_ARM
-  /* --- Init Servos to Safe Lock Position during calibration --- */
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 1500); // Pitch 1
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 500);  // Roll 1
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 1500); // Pitch 2
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 500);  // Roll 2
-#endif
-
-  /* --- Now begin the lengthy IMU initialization and calibration --- */
-  imu_app_stream_set(false);
-  imu_app_init(&hi2c1);
-  imu_app_ekf_reset();
-  imu_app_madgwick_reset();
-  imu_app_cal_gyro(4000);
-  // imu_app_stream_set(true); /* Removed so CLI starts quiet by default */
-
-#if ROBOT_MODE == ROBOT_MODE_ARM
-  emg_uart_init(&huart1);
-#endif
-
-  /* Let EKF converge (~50 samples ≈ 250 ms at 200 Hz) */
-  HAL_TIM_Base_Start_IT(&htim2);
-#if ROBOT_MODE == ROBOT_MODE_ARM
-  Attitude_t ekf_att[NUM_IMUS];
-#endif
-  for (int i = 0; i < 50; i++)
-  {
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
-    imu_app_step();
-  }
-
-#if ROBOT_MODE == ROBOT_MODE_ARM
-  /* Capture q_ref = neutral pose (filtered IMUs only) */
-  float q_ref[NUM_IMUS][4];
-  for (int i = 0; i < NUM_IMUS; i++)
-  {
-    q_ref[i][0] = 1.0f;
-    q_ref[i][1] = 0.0f;
-    q_ref[i][2] = 0.0f;
-    q_ref[i][3] = 0.0f;
-#if IMU1_RAW_ACCEL
-    if (i == 1) continue; /* raw-accel IMU needs no quaternion reference */
-#endif
-    if (imu_app_get_ekf(i, &ekf_att[i]))
-    {
-      q_ref[i][0] = ekf_att[i].q0;
-      q_ref[i][1] = ekf_att[i].q1;
-      q_ref[i][2] = ekf_att[i].q2;
-      q_ref[i][3] = ekf_att[i].q3;
-    }
-  }
-#endif
-
-#if ROBOT_MODE == ROBOT_MODE_ARM
-  /* ── Servo Smooth Startup ────────────────────────────────────────────── */
-  float smoothed_pitch[NUM_IMUS];
-  float smoothed_roll[NUM_IMUS];
-
-  for (int i = 0; i < NUM_IMUS; i++)
-  {
-    smoothed_pitch[i] = 1500.0f;
-    smoothed_roll[i] = 500.0f;
-
-#if IMU1_RAW_ACCEL
-    if (i == 1)
-    {
-      /* Seed IMU 1 from raw accel tilt — no quaternion needed */
-      float ax1s, ay1s, az1s;
-      imu_app_get_accel_g(1, &ax1s, &ay1s, &az1s);
-      float _p1 = atan2f(-ax1s, sqrtf(ay1s * ay1s + az1s * az1s)) * (180.0f / 3.14159265f);
-      float _r1 = atan2f(ay1s, az1s) * (180.0f / 3.14159265f);
-      smoothed_pitch[1] = fmaxf(1055.6f, fminf(1944.4f, 1500.0f + ((_p1 * PITCH_SERVO_DIR) * (2000.0f / 180.0f))));
-      smoothed_roll[1]  = fmaxf(500.0f,  fminf(2500.0f, 1500.0f + (_r1 * (2000.0f / 180.0f))));
-      continue;
-    }
-#endif
-    if (imu_app_get_ekf(i, &ekf_att[i]))
-    {
-#if BYPASS_IMU_FILTER
-      float ax, ay, az;
-      imu_app_get_accel_g(i, &ax, &ay, &az);
-      float _p = atan2f(-ax, sqrtf(ay * ay + az * az)) * (180.0f / 3.14159265f);
-      float _r = atan2f(ay, az) * (180.0f / 3.14159265f);
-#else
-      float q_conj[4] = {q_ref[i][0], -q_ref[i][1], -q_ref[i][2], -q_ref[i][3]};
-      float q_now_seed[4] = {ekf_att[i].q0, ekf_att[i].q1, ekf_att[i].q2, ekf_att[i].q3};
-      float q_delta_seed[4];
-      math3d_quat_multiply(q_conj, q_now_seed, q_delta_seed);
-
-      float _p, _r;
-      quat_delta_to_pitch_roll_deg(q_delta_seed, &_p, &_r);
-#endif
-
-      float pitch_us = 1500.0f + ((_p * PITCH_SERVO_DIR) * (2000.0f / 180.0f));
-      float roll_us = 1500.0f + (_r * (2000.0f / 180.0f));
-      smoothed_pitch[i] = fmaxf(1055.6f, fminf(1944.4f, pitch_us));
-      smoothed_roll[i] = fmaxf(500.0f, fminf(2500.0f, roll_us));
-    }
-  }
-
-  /* Pre-drive servos to seeded position and let them physically settle */
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)smoothed_pitch[0]);
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, (uint32_t)smoothed_roll[0]);
-  if (NUM_IMUS > 1)
-  {
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, (uint32_t)smoothed_pitch[1]);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, (uint32_t)smoothed_roll[1]);
-  }
-  osDelay(pdMS_TO_TICKS(300));
-
-  gripper_home();
-#endif
-
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); /* active-low: OFF */
-
-#if IMU1_RAW_ACCEL
-  /* Re-zero reference angles for raw-accel IMU 1 (updated on button press) */
-  float raw_ref_pitch_1 = 0.0f;
-  float raw_ref_roll_1  = 0.0f;
-#endif
-  uint32_t rezero_flash_count = 0;
-
-  /* --- Main loop: IMU-driven motor control --- */
-  while (1)
-  {
-    uint32_t count = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    if (count > 1)
-    {
-      imu_app_add_missed(count - 1);
-    }
-    imu_app_step();
-
-    if (g_rezero_requested)
-    {
-      g_rezero_requested = 0; /* Clear FIRST to avoid double-trigger */
-      for (int i = 0; i < NUM_IMUS; i++)
-      {
-#if IMU1_RAW_ACCEL
-        if (i == 1)
-        {
-          /* Capture current raw tilt as the new zero reference for IMU 1 */
-          float ax1r, ay1r, az1r;
-          imu_app_get_accel_g(1, &ax1r, &ay1r, &az1r);
-          raw_ref_pitch_1 = atan2f(-ax1r, sqrtf(ay1r * ay1r + az1r * az1r)) * (180.0f / 3.14159265f);
-          raw_ref_roll_1  = atan2f(ay1r, az1r) * (180.0f / 3.14159265f);
-          continue;
-        }
-#endif
-#if ROBOT_MODE == ROBOT_MODE_ARM
-        if (imu_app_get_ekf(i, &ekf_att[i]))
-        {
-          q_ref[i][0] = ekf_att[i].q0;
-          q_ref[i][1] = ekf_att[i].q1;
-          q_ref[i][2] = ekf_att[i].q2;
-          q_ref[i][3] = ekf_att[i].q3;
-        }
-#endif
-      }
-      rezero_flash_count = (uint32_t)IMU_FS_HZ; /* Flash display for 1 second */
-    }
-    if (rezero_flash_count > 0U)
-      rezero_flash_count--;
-
-#if ROBOT_MODE == ROBOT_MODE_ARM
-    float final_pitch_deg[NUM_IMUS] = {0};
-    float final_roll_deg[NUM_IMUS] = {0};
-
-    /* ── Thesis measurement 4: Tilt-only + deadzone + EMA block ── */
-    uint32_t _t_st = perf_timer_start();
-
-    for (int i = 0; i < NUM_IMUS; i++)
-    {
-      float pitch_deg = 0.0f;
-      float roll_deg  = 0.0f;
-      int   _valid    = 0;
-
-#if IMU1_RAW_ACCEL
-      if (i == 1)
-      {
-        /* IMU 1: raw accelerometer tilt only — no filter, no gyro fusion */
-        float ax1, ay1, az1;
-        imu_app_get_accel_g(1, &ax1, &ay1, &az1);
-        pitch_deg = atan2f(-ax1, sqrtf(ay1 * ay1 + az1 * az1)) * (180.0f / 3.14159265f) - raw_ref_pitch_1;
-        roll_deg  = atan2f(ay1, az1) * (180.0f / 3.14159265f) - raw_ref_roll_1;
-        _valid = 1;
-      }
-      else
-#endif
-      if (imu_app_get_ekf(i, &ekf_att[i]))
-      {
-#if BYPASS_IMU_FILTER
-        float ax, ay, az;
-        imu_app_get_accel_g(i, &ax, &ay, &az);
-        pitch_deg = atan2f(-ax, sqrtf(ay * ay + az * az)) * (180.0f / 3.14159265f);
-        roll_deg  = atan2f(ay, az) * (180.0f / 3.14159265f);
-#else
-        float q_now[4] = {ekf_att[i].q0, ekf_att[i].q1, ekf_att[i].q2, ekf_att[i].q3};
-
-        float q_ref_conj[4] = {q_ref[i][0], -q_ref[i][1], -q_ref[i][2], -q_ref[i][3]};
-        float q_delta[4];
-        math3d_quat_multiply(q_ref_conj, q_now, q_delta);
-        /* Fix: use Swing-Twist decomposition — no gimbal lock at pitch ±90° */
-        quat_delta_to_pitch_roll_deg(q_delta, &pitch_deg, &roll_deg);
-#endif
-        _valid = 1;
-      }
-
-      if (_valid)
-      {
-#if IMU1_RAW_ACCEL
-        if (i == 1)
-        {
-          /* IMU 1: purely raw — only angle-to-µs conversion + output clamping.
-           * No deadzone, no EMA, no deadband. The servo limits are the only
-           * constraint applied (same physical limits as IMU 0). */
-          final_pitch_deg[1] = pitch_deg;
-          final_roll_deg[1]  = roll_deg;
-          float p_us1 = 1500.0f + ((pitch_deg * PITCH_SERVO_DIR) * (2000.0f / 180.0f));
-          float r_us1 = 1500.0f + (roll_deg * (2000.0f / 180.0f));
-          smoothed_pitch[1] = fmaxf(1055.6f, fminf(1944.4f, p_us1));
-          smoothed_roll[1]  = fmaxf(500.0f,  fminf(2500.0f, r_us1));
-        }
-        else
-#endif
-        {
-          /* IMU 0 (or IMU 1 when IMU1_RAW_ACCEL=0): full deadzone + EMA pipeline */
-#define PITCH_DEADZONE_DEG 2.0f
-#define ROLL_DEADZONE_DEG 2.0f
-
-          if (fabsf(pitch_deg) < PITCH_DEADZONE_DEG)
-            pitch_deg = 0.0f;
-          else
-            pitch_deg = (pitch_deg > 0) ? (pitch_deg - PITCH_DEADZONE_DEG)
-                                        : (pitch_deg + PITCH_DEADZONE_DEG);
-
-          if (fabsf(roll_deg) < ROLL_DEADZONE_DEG)
-            roll_deg = 0.0f;
-          else
-            roll_deg = (roll_deg > 0) ? (roll_deg - ROLL_DEADZONE_DEG)
-                                      : (roll_deg + ROLL_DEADZONE_DEG);
-
-          final_pitch_deg[i] = pitch_deg;
-          final_roll_deg[i] = roll_deg;
-
-
-          float pitch_servo_us = 1500.0f + ((pitch_deg * PITCH_SERVO_DIR) * (2000.0f / 180.0f));
-          uint32_t ccr_pitch = (uint32_t)fmaxf(1055.6f, fminf(1944.4f, pitch_servo_us));
-
-          float roll_servo_us = 1500.0f + (roll_deg * (2000.0f / 180.0f));
-          uint32_t ccr_roll = (uint32_t)fmaxf(500.0f, fminf(2500.0f, roll_servo_us));
-
-#define SERVO_EMA_ALPHA_PITCH 0.1f
-#define SERVO_EMA_ALPHA_ROLL 0.1f
-#define SERVO_DEADBAND_US_PITCH 2.0f
-#define SERVO_DEADBAND_US_ROLL 2.0f
-
-          float err_pitch = (float)ccr_pitch - smoothed_pitch[i];
-          if (fabsf(err_pitch) > SERVO_DEADBAND_US_PITCH)
-          {
-            smoothed_pitch[i] += err_pitch * SERVO_EMA_ALPHA_PITCH;
-          }
-
-          float err_roll = (float)ccr_roll - smoothed_roll[i];
-          if (fabsf(err_roll) > SERVO_DEADBAND_US_ROLL)
-          {
-            smoothed_roll[i] += err_roll * SERVO_EMA_ALPHA_ROLL;
-          }
-        }
-      }
-    }
-
-    perf_timer_stop(PERF_SLOT_SWING_TWIST, _t_st); /* end of swing-twist block */
-
-    /* ── Thesis measurement 2: Servo PWM register write time ── */
-    uint32_t _t_pwm = perf_timer_start();
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)smoothed_pitch[0]);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, (uint32_t)smoothed_roll[0]);
-    if (NUM_IMUS > 1)
-    {
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, (uint32_t)smoothed_pitch[1]);
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, (uint32_t)smoothed_roll[1]);
-    }
-    perf_timer_stop(PERF_SLOT_SERVO_PWM, _t_pwm);
-
-    /* ── Thesis measurement 3: Gripper update time ── */
-    uint32_t _t_grip = perf_timer_start();
-    gripper_update();
-    perf_timer_stop(PERF_SLOT_GRIPPER, _t_grip);
-#endif
-
-    {
-      SystemState_t disp_state;
-#if ROBOT_MODE == ROBOT_MODE_ARM
-      disp_state.pitch_0 = final_pitch_deg[0];
-      disp_state.roll_0 = final_roll_deg[0];
-      disp_state.servo_pitch_us_0 = (uint32_t)smoothed_pitch[0];
-      disp_state.servo_roll_us_0 = (uint32_t)smoothed_roll[0];
-      if (NUM_IMUS > 1)
-      {
-        disp_state.pitch_1 = final_pitch_deg[1];
-        disp_state.roll_1 = final_roll_deg[1];
-        disp_state.servo_pitch_us_1 = (uint32_t)smoothed_pitch[1];
-        disp_state.servo_roll_us_1 = (uint32_t)smoothed_roll[1];
-      }
-      else
-      {
-        disp_state.pitch_1 = 0.0f;
-        disp_state.roll_1 = 0.0f;
-        disp_state.servo_pitch_us_1 = 1500U;
-        disp_state.servo_roll_us_1 = 1500U;
-      }
-#else
-      /* In Leg Mode, pull the tared bone-frame angles */
-      float thigh = 0.0f, shin = 0.0f, knee = 0.0f;
-      imu_app_get_leg_angles(&thigh, &shin, &knee);
-
-      disp_state.pitch_0 = thigh;
-      disp_state.roll_0 = knee; /* using roll_0 field to show knee angle on the screen */
-      disp_state.servo_pitch_us_0 = 1500U;
-      disp_state.servo_roll_us_0 = 1500U;
-      if (NUM_IMUS > 1) {
-        disp_state.pitch_1 = shin;
-        disp_state.roll_1 = 0.0f;
-      } else {
-        disp_state.pitch_1 = 0.0f;
-        disp_state.roll_1 = 0.0f;
-      }
-      disp_state.servo_pitch_us_1 = 1500U;
-      disp_state.servo_roll_us_1 = 1500U;
-#endif
-      /* Flash RE-ZEROED on display for 1 second after button press */
-      disp_state.status = (rezero_flash_count > 0U) ? SYS_STATUS_REZEROED
-                                                    : SYS_STATUS_RUNNING;
-      /* ── Thesis measurement 5: Display queue post time ── */
-      uint32_t _t_disp = perf_timer_start();
-      osMessageQueuePut(displayQueueHandle, &disp_state, 0U, 0U);
-      perf_timer_stop(PERF_SLOT_DISP_QUEUE, _t_disp);
-    }
-
-#if 0
-      /* ── EMG → Speed ── */
-      uint16_t   speed   = 0;
-      uint8_t    emg_raw = 0;
-      uint32_t   now_ms  = HAL_GetTick();
-
-      if (g_emg_speed_valid && (now_ms - g_emg_last_rx_ms) < EMG_SPEED_TIMEOUT_MS)
-      {
-        emg_raw = g_emg_speed;
-        speed = (uint16_t)(((uint32_t)emg_raw * 999u) / 100u);
-      }
-
-      if (!g_emg_speed_valid && (now_ms - g_emg_last_rx_ms) >= 3000)
-      {
-        emg_uart_recover();
-      }
-
-      /* ── Pitch → Direction ── */
-      MotorDir_t dir   = DIR_STOP;
-      float abs_p = (pitch_val < 0.0f) ? -pitch_val : pitch_val;
-
-      if (abs_p >= 0.0436f) {  /* 5° deadzone */
-        dir = (pitch_val > 0.0f) ? DIR_FORWARD : DIR_BACKWARD;
-      }
-
-      if (speed == 0) {
-        dir = DIR_STOP;
-      }
-
-      /* ── Roll → Steering ── */
-      cmd.speedA = speed;
-      cmd.speedB = speed;
-      cmd.dirA   = dir;
-      cmd.dirB   = dir;
-      cmd.emg_speed = emg_raw;
-
-      if (roll_val > 0.0872f) {
-        /* Tilted right → disable right motor (B) */
-        cmd.dirB   = DIR_STOP;
-        cmd.speedB = 0;
-      } else if (roll_val < -0.0872f) {
-        /* Tilted left  → disable left motor (A) */
-        cmd.dirA   = DIR_STOP;
-        cmd.speedA = 0;
-      }
-
-      osMessageQueuePut(motorCmdQueueHandle, &cmd, 0, 0);
-#endif
-#if STACK_TUNING_MODE
-    if (++tick_count >= 1000)
-    {
-      tick_count = 0;
-      s_imu_hwm = uxTaskGetStackHighWaterMark(NULL);
-    }
-#endif
-
-#ifdef DEBUG
-    UBaseType_t hwm = uxTaskGetStackHighWaterMark(NULL);
-    if (hwm < 100)
-    {
-      __BKPT(0);
-    }
-#endif
-
-    /* ── Thesis perf report: prints table every ~1 s when PERF ON ── */
-    perf_timer_report_if_due();
-  }
-}
 
 static void cli_task_fn(void *arg)
 {

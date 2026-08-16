@@ -1,4 +1,6 @@
 #include "app/imu_app.h"
+#include "app/gait_app.h"
+#include "app/leg_telemetry.h"
 #include "drivers/uart_cli.h"
 #include "utils/timebase.h"
 #include "filters/madgwick.h"
@@ -10,6 +12,7 @@
 #include "task.h"
 #include "semphr.h"
 #include "cmsis_os.h"
+#include "app/flash_storage.h"
 
 #if SENSOR_GY91
 #include "drivers/mpu9255.h"
@@ -19,11 +22,11 @@
 #endif
 
 #include <string.h>
-#include <math.h>   /* sqrtf for mag norm */
-#include <stdio.h>  /* snprintf for log queue entries */
-#include <stdlib.h> /* abs() for stillness detection */
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-static I2C_HandleTypeDef *s_hi2c = NULL;
+static I2C_HandleTypeDef *s_hi2c[2] = {NULL, NULL};
 
 SemaphoreHandle_t g_i2c_mutex = NULL;
 
@@ -101,60 +104,6 @@ static int16_t s_gz_off[NUM_IMUS] = {0};
 static float s_gyro_lsb_per_dps[NUM_IMUS];
 static float s_acc_lsb_per_g[NUM_IMUS];
 
-// --- Gait Analysis Variables ---
-static int s_gait_phase = 0; // 0 = STANCE, 1 = SWING
-static float s_last_hs_s = 0.0f;
-static float s_last_to_s = 0.0f;
-static float s_gyro_sma = 0.0f;
-static float s_current_knee_angle = 0.0f;
-static float s_current_thigh_pitch = 0.0f;
-static float s_current_shin_pitch = 0.0f;
-static float s_swing_max_knee = 0.0f;
-static uint8_t s_mid_swing_armed = 0;
-static float s_stride_time = 0.0f;
-static int s_event_flag = 0;
-
-static float s_tare_thigh_offset = 0.0f;
-static float s_tare_shin_offset = 0.0f;
-static float s_tare_knee_offset = 0.0f;
-
-/* Sensor-to-Bone Alignment Quaternions */
-static float s_q_ref[NUM_IMUS][4] = { {1.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f} };
-
-// Helper to extract Pitch purely from the Gravity Vector (Immune to Yaw!)
-static float imu_app_get_gravity_pitch(const float q[4]) {
-    // Extract the Earth's vertical Z-axis (Gravity) mapped into the Sensor frame
-    float gx = 2.0f * (q[1]*q[3] - q[0]*q[2]);
-    float gz = q[0]*q[0] - q[1]*q[1] - q[2]*q[2] + q[3]*q[3];
-
-    // Pitch is the tilt of the gravity vector in the X-Z plane
-    return atan2f(-gx, gz) * (180.0f / (float)M_PI);
-}
-
-void imu_app_gait_tare(void)
-{
-    // Capture the exact pitch of the gravity vector at this millisecond
-    // to compensate for physical velcro strap misalignments.
-    s_tare_thigh_offset = imu_app_get_gravity_pitch(s_ekf[0].q);
-    s_tare_shin_offset  = imu_app_get_gravity_pitch(s_ekf[1].q);
-    s_tare_knee_offset  = 0.0f;
-
-    /* Capture the Bone Frame alignment quaternions */
-    for (int i = 0; i < NUM_IMUS; i++) {
-        s_q_ref[i][0] = s_ekf[i].q[0];
-        s_q_ref[i][1] = s_ekf[i].q[1];
-        s_q_ref[i][2] = s_ekf[i].q[2];
-        s_q_ref[i][3] = s_ekf[i].q[3];
-    }
-}
-
-void imu_app_get_leg_angles(float *thigh_pitch, float *shin_pitch, float *knee_angle)
-{
-    if (thigh_pitch) *thigh_pitch = s_current_thigh_pitch;
-    if (shin_pitch) *shin_pitch = s_current_shin_pitch;
-    if (knee_angle) *knee_angle = s_current_knee_angle;
-}
-
 
 
 // --- Accel raw offsets (per-IMU, initialised from app_config.h defaults) ---
@@ -165,54 +114,17 @@ static int16_t s_az_off[NUM_IMUS] = {0};
 static const float DEG2RAD = 0.017453292519943295f;
 
 #if ROBOT_MODE == ROBOT_MODE_LEG
-UART_HandleTypeDef huart6_esp;
-
-#pragma pack(push, 1)
-typedef struct {
-    uint8_t header1;           // 0xAA
-    uint8_t header2;           // 0x55
-    int16_t thigh_angle_deg100;
-    int16_t shin_angle_deg100;
-    int16_t knee_angle_deg100;
-    uint8_t checksum;
-} EspTelemetry_t;
-#pragma pack(pop)
-
-static void imu_app_usart6_init(void)
-{
-    __HAL_RCC_USART6_CLK_ENABLE();
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-    // PA11 -> USART6_TX
-    // (RX Disabled to prevent floating pin noise)
-    GPIO_InitStruct.Pin = GPIO_PIN_11;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF8_USART6;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-    huart6_esp.Instance = USART6;
-    huart6_esp.Init.BaudRate = 115200;
-    huart6_esp.Init.WordLength = UART_WORDLENGTH_8B;
-    huart6_esp.Init.StopBits = UART_STOPBITS_1;
-    huart6_esp.Init.Parity = UART_PARITY_NONE;
-    huart6_esp.Init.Mode = UART_MODE_TX;
-    huart6_esp.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-    huart6_esp.Init.OverSampling = UART_OVERSAMPLING_16;
-    HAL_UART_Init(&huart6_esp);
-}
+/* leg_telemetry.c owns the UART6 handle now — nothing to declare here */
 #endif
 
-void imu_app_init(I2C_HandleTypeDef *hi2c)
+void imu_app_init(I2C_HandleTypeDef *hi2c_1, I2C_HandleTypeDef *hi2c_3)
 {
-  s_hi2c = hi2c;
+  s_hi2c[0] = hi2c_1;
+  s_hi2c[1] = hi2c_3;
   imu_app_stats_reset();
 
-#if ROBOT_MODE == ROBOT_MODE_LEG
-  imu_app_usart6_init();
+#if ROBOT_MODE == ROBOT_MODE_LEG || ROBOT_MODE == ROBOT_MODE_FULL
+  leg_telemetry_init();
 #endif
 
   if (g_i2c_mutex == NULL)
@@ -222,22 +134,24 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
 
   for (int i = 0; i < NUM_IMUS; i++)
   {
+    I2C_HandleTypeDef *bus = (i < 2) ? s_hi2c[0] : s_hi2c[1];
+    uint8_t addr = (i % 2 == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
+
 #if SENSOR_GY91
     /* ---- GY-91: MPU-9255 + AK8963 bring-up ---- */
     {
       mpu9255_cfg_t mpu_cfg;
-      uint8_t addr = (i == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
-      mpu9255_status_t st = mpu9255_init_200hz(hi2c, addr, &mpu_cfg);
+      mpu9255_status_t st = mpu9255_init_200hz(bus, addr, &mpu_cfg);
       if (st == MPU9255_OK)
       {
         /* Enable bypass so STM32 can reach AK8963 on the same bus */
-        mpu9255_enable_bypass(hi2c, addr);
+        mpu9255_enable_bypass(bus, addr);
 
         /* Read sensitivity adjustment from AK8963 fuse ROM */
-        if (ak8963_read_asa(hi2c, &s_ak_cfg[i]) == AK8963_OK)
+        if (ak8963_read_asa(bus, &s_ak_cfg[i]) == AK8963_OK)
         {
           /* Start continuous 100 Hz 16-bit measurement */
-          ak8963_init_continuous_100hz(hi2c);
+          ak8963_init_continuous_100hz(bus);
         }
       }
       /* Zero-initialise last mag sample — valid=0 until first read */
@@ -249,26 +163,27 @@ void imu_app_init(I2C_HandleTypeDef *hi2c)
 #else
     {
       mpu6050_cfg_t mpu_cfg;
-      uint8_t addr = (i == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
 
-#if ROBOT_MODE == ROBOT_MODE_LEG
-      /* LEG MODE: configure each IMU independently for its body segment */
-      static const mpu6050_hw_cfg_t s_leg_hw[2] = {
-          /* IMU 0 — Thigh: ±500dps, ±4g, 42Hz DLPF (slow segment, high precision) */
-          { LEG_IMU0_SMPLRT_DIV, LEG_IMU0_DLPF_CFG, LEG_IMU0_GYRO_FS, LEG_IMU0_ACCEL_FS,
-            LEG_IMU0_GYRO_LSB_PER_DPS, LEG_IMU0_ACC_LSB_PER_G },
-          /* IMU 1 — Shin:  ±500dps, ±8g, 98Hz DLPF (faster, survives impacts) */
-          { LEG_IMU1_SMPLRT_DIV, LEG_IMU1_DLPF_CFG, LEG_IMU1_GYRO_FS, LEG_IMU1_ACCEL_FS,
-            LEG_IMU1_GYRO_LSB_PER_DPS, LEG_IMU1_ACC_LSB_PER_G },
+#if ROBOT_MODE == ROBOT_MODE_LEG || ROBOT_MODE == ROBOT_MODE_FULL
+      /* Configure each IMU independently for its body segment */
+      static const mpu6050_hw_cfg_t s_leg_hw[4] = {
+          /* IMU 0 — Leg 1 Thigh: ±500dps, ±4g, 42Hz DLPF */
+          { LEG_IMU0_SMPLRT_DIV, LEG_IMU0_DLPF_CFG, LEG_IMU0_GYRO_FS, LEG_IMU0_ACCEL_FS, LEG_IMU0_GYRO_LSB_PER_DPS, LEG_IMU0_ACC_LSB_PER_G },
+          /* IMU 1 — Leg 1 Shin:  ±500dps, ±8g, 98Hz DLPF */
+          { LEG_IMU1_SMPLRT_DIV, LEG_IMU1_DLPF_CFG, LEG_IMU1_GYRO_FS, LEG_IMU1_ACCEL_FS, LEG_IMU1_GYRO_LSB_PER_DPS, LEG_IMU1_ACC_LSB_PER_G },
+          /* IMU 2 — Leg 2 Thigh (or Arm 1): ±500dps, ±4g, 42Hz DLPF */
+          { LEG_IMU2_SMPLRT_DIV, LEG_IMU2_DLPF_CFG, LEG_IMU2_GYRO_FS, LEG_IMU2_ACCEL_FS, LEG_IMU2_GYRO_LSB_PER_DPS, LEG_IMU2_ACC_LSB_PER_G },
+          /* IMU 3 — Leg 2 Shin (or Arm 2):  ±500dps, ±8g, 98Hz DLPF */
+          { LEG_IMU3_SMPLRT_DIV, LEG_IMU3_DLPF_CFG, LEG_IMU3_GYRO_FS, LEG_IMU3_ACCEL_FS, LEG_IMU3_GYRO_LSB_PER_DPS, LEG_IMU3_ACC_LSB_PER_G }
       };
       s_gyro_lsb_per_dps[i] = s_leg_hw[i].gyro_lsb_per_dps;
       s_acc_lsb_per_g[i]    = s_leg_hw[i].acc_lsb_per_g;
-      mpu6050_status_t st = mpu6050_init_custom(hi2c, addr, &s_leg_hw[i], &mpu_cfg);
+      mpu6050_status_t st = mpu6050_init_custom(bus, addr, &s_leg_hw[i], &mpu_cfg);
 #else
       /* ARM MODE: both IMUs use the original shared config — unchanged */
       s_gyro_lsb_per_dps[i] = 32.8f;   /* ±1000 dps */
       s_acc_lsb_per_g[i]    = 4096.0f; /* ±8 g       */
-      mpu6050_status_t st = mpu6050_init_200hz(hi2c, addr, &mpu_cfg);
+      mpu6050_status_t st = mpu6050_init_200hz(bus, addr, &mpu_cfg);
 #endif
 
       if (st != MPU6050_OK)
@@ -319,40 +234,9 @@ void imu_app_add_missed(uint32_t count)
 
 void imu_app_step(void)
 {
-    // Smart Auto-Tare: Wait for the EKF to fully converge, then count down 5 seconds.
-    // This guarantees you always have exactly 5 seconds to get into position AFTER the EKF stabilizes.
-    static bool  s_auto_tare_done    = false;
-    static float s_last_thigh_sample = -9999.0f;
-    static float s_last_shin_sample  = -9999.0f;
-    static uint32_t s_stable_start_ms = 0;
-    
-    if (!s_auto_tare_done && s_ekf_valid[0] && s_ekf_valid[1]) {
-        float cur_thigh = imu_app_get_gravity_pitch(s_ekf[0].q);
-        float cur_shin  = imu_app_get_gravity_pitch(s_ekf[1].q);
-        
-        float thigh_delta = cur_thigh - s_last_thigh_sample;
-        float shin_delta  = cur_shin  - s_last_shin_sample;
-        if (thigh_delta < 0.0f) thigh_delta = -thigh_delta;
-        if (shin_delta  < 0.0f) shin_delta  = -shin_delta;
-        
-        s_last_thigh_sample = cur_thigh;
-        s_last_shin_sample  = cur_shin;
-        
-        // EKF is considered converged when angles are stable (changing < 0.5 deg/tick)
-        bool is_stable = (thigh_delta < 0.5f) && (shin_delta < 0.5f) && (s_last_thigh_sample != -9999.0f);
-        
-        uint32_t now_ms = HAL_GetTick();
-        if (!is_stable) {
-            s_stable_start_ms = now_ms; // Reset timer every time the EKF is still bouncing
-        } else if ((now_ms - s_stable_start_ms) > 5000) { // 5 seconds of stable = ready to tare
-            imu_app_gait_tare();
-            s_auto_tare_done = true;
-        }
-    }
-
   s_tick_count++;
 
-  if (!s_hi2c)
+  if (!s_hi2c[0])
     return;
 
   // capture timestamp for this sample (used for dt + rate window)
@@ -367,26 +251,24 @@ void imu_app_step(void)
   bool imu_ok[NUM_IMUS];
   for (int i = 0; i < NUM_IMUS; i++)
   {
-    uint8_t addr = (i == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
+    I2C_HandleTypeDef *bus = (i < 2) ? s_hi2c[0] : s_hi2c[1];
+    uint8_t addr = (i % 2 == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
     imu_ok[i] = true;
+    if (!bus) {
+      imu_ok[i] = false;
+      continue;
+    }
 #if SENSOR_GY91
-    if (mpu9255_read_raw(s_hi2c, addr, &s_last[i]) == MPU9255_OK)
+    if (mpu9255_read_raw(bus, addr, &s_last[i]) == MPU9255_OK)
     {
-      /* Best-effort AK8963 read — if DRDY=0, s_last_mag.valid stays 0
-       * and the previous sample is preserved unchanged.
-       *
-       * NOTE: Two GY-91 modules on the same I2C bus will have AK8963
-       *       address collision at 0x0C.  For dual-GY91 operation the
-       *       second AK8963 must either use the MPU's aux I2C master
-       *       or an external I2C mux / address translator.           */
-      ak8963_read_raw(s_hi2c, &s_last_mag[i]);
+      ak8963_read_raw(bus, &s_last_mag[i]);
     }
     else
     {
       imu_ok[i] = false;
     }
 #else
-    if (mpu6050_read_raw(s_hi2c, addr, &s_last[i]) != MPU6050_OK)
+    if (mpu6050_read_raw(bus, addr, &s_last[i]) != MPU6050_OK)
     {
       imu_ok[i] = false;
     }
@@ -645,134 +527,8 @@ void imu_app_step(void)
 #endif
     } // End of IMU loop
 
-    // ---- Gait Analysis & Unified Streaming ----
-    if (s_print_div != 0 && (s_sample_count % s_print_div) == 0)
-    {
-      uint32_t t_now = timebase_cycles_to_us(timebase_cycles());
-      float t_sec = (float)t_now / 1000000.0f;
 
-      // Extract mapped Euler angles
-      if (NUM_IMUS >= 2 && s_ekf_valid[0] && s_ekf_valid[1]) {
-          // 1. Calculate Signed Pitch Angles purely from Gravity Vector
-          // Because gravity always points down, this is 100% immune to 180-degree Yaw spins!
-          float raw_thigh_pitch = imu_app_get_gravity_pitch(s_ekf[0].q);
-          float raw_shin_pitch  = imu_app_get_gravity_pitch(s_ekf[1].q);
-          
-          float t_pitch = -(raw_thigh_pitch - s_tare_thigh_offset);
-          float s_pitch = -(raw_shin_pitch - s_tare_shin_offset);
-          
-          // Apply an Exponential Moving Average (Low-Pass Filter) to eliminate physical jitter
-          static float s_smooth_thigh = 0.0f;
-          static float s_smooth_shin = 0.0f;
-          static bool s_filter_init = false;
-          
-          if (!s_filter_init) {
-              s_smooth_thigh = t_pitch;
-              s_smooth_shin  = s_pitch;
-              s_filter_init  = true;
-          } else {
-              float alpha = 0.08f; // Lowered for maximum smoothness (was 0.15)
-              s_smooth_thigh = (s_smooth_thigh * (1.0f - alpha)) + (t_pitch * alpha);
-              s_smooth_shin  = (s_smooth_shin * (1.0f - alpha))  + (s_pitch * alpha);
-          }
-          
-          // Quantize to nearest 0.1 degrees, then apply deadband:
-          // Only push the new value to output if it has moved >= 0.1 deg.
-          // This locks the output solid when holding still, eliminating micro-flicker.
-          float q_thigh = roundf(s_smooth_thigh * 10.0f) / 10.0f;
-          float q_shin  = roundf(s_smooth_shin  * 10.0f) / 10.0f;
-          if (fabsf(q_thigh - s_current_thigh_pitch) >= 0.1f)
-              s_current_thigh_pitch = q_thigh;
-          if (fabsf(q_shin - s_current_shin_pitch) >= 0.1f)
-              s_current_shin_pitch = q_shin;
-          
-          // 2. Knee Angle is exactly Thigh - Shin
-          s_current_knee_angle = s_current_thigh_pitch - s_current_shin_pitch;
-          
-          if (s_current_knee_angle < 0.0f) s_current_knee_angle = 0.0f;
-
-          // Run State Machine
-          float gyroY = (float)s_last[1].gy; // Shin Gyro Y
-          s_gyro_sma = s_gyro_sma * 0.8f + gyroY * 0.2f;
-          s_event_flag = 0;
-
-          if (s_gait_phase == 0) { // STANCE
-              if ((t_sec - s_last_hs_s) > 0.300f) {
-                  if (s_current_knee_angle > 15.0f && s_gyro_sma > 1000.0f) {
-                      s_gait_phase = 1; // SWING
-                      s_last_to_s = t_sec;
-                      s_event_flag = 2; // TO event
-                      s_swing_max_knee = s_current_knee_angle;
-                  }
-              }
-          } else { // SWING
-              if (s_current_knee_angle > s_swing_max_knee) s_swing_max_knee = s_current_knee_angle;
-
-              if (!s_mid_swing_armed && (t_sec - s_last_to_s) > 0.300f && s_current_knee_angle < (s_swing_max_knee * 0.8f)) {
-                  s_mid_swing_armed = 1;
-                  s_event_flag = 3; // MidSwing Armed
-              }
-
-              if (s_mid_swing_armed && s_current_knee_angle < 25.0f && s_gyro_sma < 0.0f) {
-                  s_gait_phase = 0; // STANCE
-                  s_mid_swing_armed = 0;
-                  s_event_flag = 1; // HS event
-                  s_stride_time = t_sec - s_last_hs_s;
-                  s_last_hs_s = t_sec;
-              }
-          }
-      }
-
-      if (s_stream_en && logQueueHandle != NULL)
-      {
-          LogLine_t entry;
-#if NUM_IMUS >= 2
-          snprintf(entry.line, sizeof(entry.line),
-                   "%lu,%d,%d,%d,%d,%d,%d,%ld,%ld,%ld,%ld,%d,%d,%d,%d,%d,%d,%ld,%ld,%ld,%ld,%d,%d,%d,%d,%d,%d\r\n",
-                   (unsigned long)t_now,
-                   (int)s_last[0].ax, (int)s_last[0].ay, (int)s_last[0].az,
-                   (int)s_last[0].gx, (int)s_last[0].gy, (int)s_last[0].gz,
-                   (long)(s_ekf[0].q[0]*10000), (long)(s_ekf[0].q[1]*10000), (long)(s_ekf[0].q[2]*10000), (long)(s_ekf[0].q[3]*10000),
-                   (int)s_last[1].ax, (int)s_last[1].ay, (int)s_last[1].az,
-                   (int)s_last[1].gx, (int)s_last[1].gy, (int)s_last[1].gz,
-                   (long)(s_ekf[1].q[0]*10000), (long)(s_ekf[1].q[1]*10000), (long)(s_ekf[1].q[2]*10000), (long)(s_ekf[1].q[3]*10000),
-                   (int)(s_current_thigh_pitch * 100.0f), (int)(s_current_shin_pitch * 100.0f), (int)(s_current_knee_angle * 100.0f),
-                   s_gait_phase, s_event_flag, (int)(s_stride_time * 1000.0f));
-          osMessageQueuePut(logQueueHandle, &entry, 0U, 0U);
-#else
-          for (int i = 0; i < NUM_IMUS; i++) {
-              snprintf(entry.line, sizeof(entry.line),
-                       "%lu,%d,%d,%d,%d,%d,%d,%d,%ld,%ld,%ld,%ld,%lu\r\n",
-                       (unsigned long)t_now, i,
-                       (int)s_last[i].ax, (int)s_last[i].ay, (int)s_last[i].az,
-                       (int)s_last[i].gx, (int)s_last[i].gy, (int)s_last[i].gz,
-                       (long)(s_ekf[i].q[0]*10000), (long)(s_ekf[i].q[1]*10000), (long)(s_ekf[i].q[2]*10000), (long)(s_ekf[i].q[3]*10000),
-                       (unsigned long)timebase_cycles_to_us(s_svc_last_us));
-              osMessageQueuePut(logQueueHandle, &entry, 0U, 0U);
-          }
-#endif
-      }
-      
-#if ROBOT_MODE == ROBOT_MODE_LEG
-      EspTelemetry_t pkt;
-      pkt.header1 = 0xAA;
-      pkt.header2 = 0x55;
-      pkt.thigh_angle_deg100 = (int16_t)(s_current_thigh_pitch * 100.0f);
-      pkt.shin_angle_deg100 = (int16_t)(s_current_shin_pitch * 100.0f);
-      pkt.knee_angle_deg100 = (int16_t)(s_current_knee_angle * 100.0f);
-      
-      uint8_t chk = pkt.header1 + pkt.header2;
-      chk += (uint8_t)(pkt.thigh_angle_deg100 & 0xFF) + (uint8_t)(pkt.thigh_angle_deg100 >> 8);
-      chk += (uint8_t)(pkt.shin_angle_deg100 & 0xFF) + (uint8_t)(pkt.shin_angle_deg100 >> 8);
-      chk += (uint8_t)(pkt.knee_angle_deg100 & 0xFF) + (uint8_t)(pkt.knee_angle_deg100 >> 8);
-      pkt.checksum = chk;
-      
-      // UART Transmit to ESP32
-      HAL_UART_Transmit(&huart6_esp, (uint8_t*)&pkt, sizeof(pkt), 5);
-#endif
-
-    }
-  }
+  } /* end if (read_ok) */
   else
   {
 #if SENSOR_GY91
@@ -984,7 +740,7 @@ bool imu_app_cal_get(uint8_t imu_idx, int16_t *gx_off, int16_t *gy_off, int16_t 
 
 bool imu_app_cal_gyro(uint32_t duration_ms)
 {
-  if (!s_hi2c)
+  if (!s_hi2c[0])
     return false;
   if (duration_ms < 200)
     return false;
@@ -1001,10 +757,13 @@ bool imu_app_cal_gyro(uint32_t duration_ms)
     xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
     for (int i = 0; i < NUM_IMUS; i++)
     {
-      uint8_t addr = (i == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
+      I2C_HandleTypeDef *bus = (i < 2) ? s_hi2c[0] : s_hi2c[1];
+      uint8_t addr = (i % 2 == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
+      if (!bus) continue;
+
 #if SENSOR_GY91
       mpu9255_raw_t r;
-      if (mpu9255_read_raw(s_hi2c, addr, &r) == MPU9255_OK)
+      if (mpu9255_read_raw(bus, addr, &r) == MPU9255_OK)
       {
         sum_x[i] += r.gx;
         sum_y[i] += r.gy;
@@ -1013,7 +772,7 @@ bool imu_app_cal_gyro(uint32_t duration_ms)
       }
 #else
       mpu6050_raw_t r;
-      if (mpu6050_read_raw(s_hi2c, addr, &r) == MPU6050_OK)
+      if (mpu6050_read_raw(bus, addr, &r) == MPU6050_OK)
       {
         sum_x[i] += r.gx;
         sum_y[i] += r.gy;
@@ -1041,6 +800,40 @@ bool imu_app_cal_gyro(uint32_t duration_ms)
 
   return all_ok;
 }
+
+bool imu_app_load_calibration(void) {
+    FlashCalibData_t calib_data;
+    if (flash_storage_read(&calib_data)) {
+        for (int i = 0; i < NUM_IMUS; i++) {
+            s_gx_off[i] = calib_data.gx_off[i];
+            s_gy_off[i] = calib_data.gy_off[i];
+            s_gz_off[i] = calib_data.gz_off[i];
+            s_ax_off[i] = calib_data.ax_off[i];
+            s_ay_off[i] = calib_data.ay_off[i];
+            s_az_off[i] = calib_data.az_off[i];
+        }
+        return true;
+    }
+    return false;
+}
+
+bool imu_app_save_calibration(void) {
+    FlashCalibData_t calib_data;
+    calib_data.magic = FLASH_CALIB_MAGIC;
+    for (int i = 0; i < NUM_IMUS; i++) {
+        calib_data.gx_off[i] = s_gx_off[i];
+        calib_data.gy_off[i] = s_gy_off[i];
+        calib_data.gz_off[i] = s_gz_off[i];
+        calib_data.ax_off[i] = s_ax_off[i];
+        calib_data.ay_off[i] = s_ay_off[i];
+        calib_data.az_off[i] = s_az_off[i];
+    }
+    return flash_storage_write(&calib_data);
+}
+
+// ------------------------------------------------------------
+// EKF Helpers
+// ------------------------------------------------------------
 
 // ------------------------------------------------------------
 // Accel bias getter / setter (per-IMU)
@@ -1073,7 +866,7 @@ void imu_app_set_accel_bias(uint8_t imu_idx, int16_t ax, int16_t ay, int16_t az)
 
 bool imu_app_cal_accel(uint32_t duration_ms)
 {
-  if (!s_hi2c)
+  if (!s_hi2c[0])
     return false;
   if (duration_ms < 200)
     return false;
@@ -1090,10 +883,13 @@ bool imu_app_cal_accel(uint32_t duration_ms)
     xSemaphoreTake(g_i2c_mutex, portMAX_DELAY);
     for (int i = 0; i < NUM_IMUS; i++)
     {
-      uint8_t addr = (i == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
+      I2C_HandleTypeDef *bus = (i < 2) ? s_hi2c[0] : s_hi2c[1];
+      uint8_t addr = (i % 2 == 0) ? MPU6050_ADDR_0 : MPU6050_ADDR_1;
+      if (!bus) continue;
+
 #if SENSOR_GY91
       mpu9255_raw_t r;
-      if (mpu9255_read_raw(s_hi2c, addr, &r) == MPU9255_OK)
+      if (mpu9255_read_raw(bus, addr, &r) == MPU9255_OK)
       {
         sum_x[i] += r.ax;
         sum_y[i] += r.ay;
@@ -1102,7 +898,7 @@ bool imu_app_cal_accel(uint32_t duration_ms)
       }
 #else
       mpu6050_raw_t r;
-      if (mpu6050_read_raw(s_hi2c, addr, &r) == MPU6050_OK)
+      if (mpu6050_read_raw(bus, addr, &r) == MPU6050_OK)
       {
         sum_x[i] += r.ax;
         sum_y[i] += r.ay;
@@ -1232,6 +1028,17 @@ void imu_app_get_accel_g(uint8_t imu_idx, float *ax, float *ay, float *az)
     *az = s_az_g[imu_idx];
   taskEXIT_CRITICAL();
 }
+
+void imu_app_get_gyro_raw(uint8_t imu_idx, int16_t *gx, int16_t *gy, int16_t *gz)
+{
+  if (imu_idx >= NUM_IMUS) return;
+  taskENTER_CRITICAL();
+  if (gx) *gx = s_last[imu_idx].gx;
+  if (gy) *gy = s_last[imu_idx].gy;
+  if (gz) *gz = s_last[imu_idx].gz;
+  taskEXIT_CRITICAL();
+}
+
 
 #if SENSOR_GY91
 /* ----------------------------------------------------------------

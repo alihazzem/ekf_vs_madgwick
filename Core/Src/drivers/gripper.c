@@ -151,6 +151,11 @@ void gripper_update(void) {
   uint32_t now = HAL_GetTick();
   uint8_t current_emg_state = 0;
 
+  /* Check for physical disconnect or frozen sender timeout */
+  if (g_emg_speed_valid && (now - g_emg_last_rx_ms) >= 500) {
+      g_emg_speed_valid = false;
+  }
+
   /* STEP 1: Determine EMG binary state with hysteresis logic */
   if (g_emg_speed_valid && g_emg_speed == 100) {
     current_emg_state = 1; /* ACTIVE */
