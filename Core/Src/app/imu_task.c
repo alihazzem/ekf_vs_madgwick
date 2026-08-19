@@ -128,18 +128,10 @@ void imu_task_fn(void *arg)
   imu_app_ekf_reset();
   imu_app_madgwick_reset();
   
-  if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET) {
-      /* User is holding the physical button on boot! Force fresh calibration */
-      imu_app_cal_gyro(4000);
-      imu_app_save_calibration();
-  } else if (!imu_app_load_calibration()) {
-      /* No saved calibration found, run fresh */
-      imu_app_cal_gyro(4000);
-      imu_app_save_calibration();
-  }
+  imu_app_cal_gyro(4000);
   // imu_app_stream_set(true); /* Removed so CLI starts quiet by default */
 
-#if ROBOT_MODE == ROBOT_MODE_ARM
+#if ROBOT_MODE == ROBOT_MODE_ARM || ROBOT_MODE == ROBOT_MODE_FULL
   emg_uart_init(&huart1);
 #endif
 

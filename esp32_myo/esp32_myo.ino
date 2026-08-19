@@ -13,8 +13,8 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 // ─── PIN CONFIG ───────────────────────────────────────────────────────────────
-#define STM32_TX_PIN   17
-#define STM32_RX_PIN   16
+#define STM32_TX_PIN   18
+#define STM32_RX_PIN   19
 #define STM32_BAUD     921600
 
 #define LED_R          25
@@ -69,6 +69,7 @@ unsigned long calibPhaseStart = 0;
 float THR_ACTIVATE   = 0;
 float THR_DEACTIVATE = 0;
 float restRMS        = 0;
+float flexRMS        = 0;
 
 // ─── BLE STATE ────────────────────────────────────────────────────────────────
 BLEClient* client       = nullptr;
@@ -181,18 +182,20 @@ float applyHighpass(float x, int ch) {
 
 // ─── SPEED QUANTIZATION ──────────────────────────────────────────────────────
 uint8_t rmsToSpeed(float rms) {
-  static uint8_t lastSpeed = 0;
-
-  if (lastSpeed == 0) {
-    if (rms >= THR_ACTIVATE) {
-      lastSpeed = 100;
-    }
-  } else {
-    if (rms <= THR_DEACTIVATE) {
-      lastSpeed = 0;
-    }
+  if (rms <= THR_DEACTIVATE) {
+    return 0;
   }
-  return lastSpeed;
+  if (rms >= flexRMS) {
+    return 100;
+  }
+
+  float range = flexRMS - THR_DEACTIVATE;
+  if (range <= 0.0f) {
+    return 100;
+  }
+
+  float mapped = ((rms - THR_DEACTIVATE) / range) * 100.0f;
+  return (uint8_t)mapped;
 }
 
 // ─── CALIBRATION HANDLER ─────────────────────────────────────────────────────
@@ -244,7 +247,7 @@ void handleCalibration(float rms) {
     calibSamples++;
 
     if (millis() - calibPhaseStart >= CALIB_DURATION_MS) {
-      float flexRMS = calibAccum / calibSamples;
+      flexRMS       = calibAccum / calibSamples;
       float range   = flexRMS - restRMS;
 
       THR_DEACTIVATE = restRMS + range * 0.30f;

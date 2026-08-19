@@ -22,7 +22,7 @@
 #define ROBOT_MODE_ARM  1
 #define ROBOT_MODE_LEG  2
 #define ROBOT_MODE_FULL 3
-#define ROBOT_MODE      ROBOT_MODE_FULL
+#define ROBOT_MODE      ROBOT_MODE_ARM
 
 #define SENSOR_GY91 0
 

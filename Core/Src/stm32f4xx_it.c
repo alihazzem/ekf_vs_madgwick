@@ -22,6 +22,7 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "app/app_config.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -220,10 +221,12 @@ void DMA2_Stream2_IRQHandler(void)
 /**
   * @brief This function handles DMA2 stream6 global interrupt.
   */
+#if ROBOT_MODE == ROBOT_MODE_LEG || ROBOT_MODE == ROBOT_MODE_FULL
 extern DMA_HandleTypeDef hdma_usart6_tx;
 void DMA2_Stream6_IRQHandler(void)
 {
   HAL_DMA_IRQHandler(&hdma_usart6_tx);
 }
+#endif
 
 /* USER CODE END 1 */

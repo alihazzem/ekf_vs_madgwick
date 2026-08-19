@@ -24,22 +24,22 @@ static void motor_stop(void) {
 #endif
 }
 
-static void motor_forward(void) {
-  /* Both motors forward at 50% PWM: A-side=LOW, B-side=50% */
+static void motor_forward(uint16_t pwm) {
+  /* Both motors forward: A-side=LOW, B-side=PWM */
   TIM4->CCR1 = 0;
-  TIM4->CCR2 = 10000; /* 50% of 20000 */
+  TIM4->CCR2 = pwm;
 #if NUM_DC_MOTORS > 1
   TIM4->CCR3 = 0;
-  TIM4->CCR4 = 10000;
+  TIM4->CCR4 = pwm;
 #endif
 }
 
-static void motor_backward(void) {
-  /* Both motors backward at 50% PWM: A-side=50%, B-side=LOW */
-  TIM4->CCR1 = 10000; /* 50% of 20000 */
+static void motor_backward(uint16_t pwm) {
+  /* Both motors backward: A-side=PWM, B-side=LOW */
+  TIM4->CCR1 = pwm;
   TIM4->CCR2 = 0;
 #if NUM_DC_MOTORS > 1
-  TIM4->CCR3 = 10000;
+  TIM4->CCR3 = pwm;
   TIM4->CCR4 = 0;
 #endif
 }
@@ -133,7 +133,7 @@ void gripper_init(void) {
 
 void gripper_home(void) {
   /* Run motor in OPEN direction (backward) */
-  motor_backward();
+  motor_backward(10000);
   
   /* Wait for full travel time */
   osDelay(pdMS_TO_TICKS(GRIPPER_HOMING_MS));
@@ -156,8 +156,8 @@ void gripper_update(void) {
       g_emg_speed_valid = false;
   }
 
-  /* STEP 1: Determine EMG binary state with hysteresis logic */
-  if (g_emg_speed_valid && g_emg_speed == 100) {
+  /* STEP 1: Determine EMG binary state */
+  if (g_emg_speed_valid && g_emg_speed > 0) {
     current_emg_state = 1; /* ACTIVE */
   } else {
     current_emg_state = 0; /* RELAXED */
@@ -173,9 +173,10 @@ void gripper_update(void) {
       s_gripper_state = s_pending_state;
       s_state_start_ms = now;
       if (s_gripper_state == GRIPPER_CLOSING) {
-        motor_forward();
+        uint16_t pwm = (g_emg_speed * 20000) / 100;
+        motor_forward(pwm);
       } else if (s_gripper_state == GRIPPER_OPENING) {
-        motor_backward();
+        motor_backward(10000);
       }
     } else {
       /* Waiting for 10ms stop to finish. Update state and return. */
@@ -207,6 +208,10 @@ void gripper_update(void) {
         s_reverse_stop_ms = now;
         s_pending_state = GRIPPER_OPENING;
         motor_stop();
+      } else {
+        /* Continuously update PWM based on EMG speed */
+        uint16_t pwm = (g_emg_speed * 20000) / 100;
+        motor_forward(pwm);
       }
       break;
 

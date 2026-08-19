@@ -14,7 +14,7 @@
 
 /* ====== IMU COUNT & I2C ADDRESSES ====== */
 #if ROBOT_MODE == ROBOT_MODE_ARM
-  #define NUM_IMUS     1
+  #define NUM_IMUS     2
 #elif ROBOT_MODE == ROBOT_MODE_LEG
   #if NUM_LEGS == 2
     #define NUM_IMUS   4
